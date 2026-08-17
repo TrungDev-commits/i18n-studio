@@ -438,75 +438,114 @@ function parseTranslationPhp(phpContent) {
 function writeTranslationPhp(filePath, newMappedTables) {
   const fs = require('fs');
   const path = require('path');
-  let existingTables = {};
-  let isNested = true;
 
-  if (fs.existsSync(filePath)) {
-    try {
-      const content = fs.readFileSync(filePath, 'utf8');
-      const parsed = parseTranslationPhp(content);
-      existingTables = parsed.tables;
-      if (content.length > 0) {
-        isNested = parsed.isNested;
-      }
-    } catch (e) {
-      console.error(`Lỗi đọc file translation.php (${filePath}):`, e.message);
-    }
-  } else {
+  if (!fs.existsSync(filePath)) {
     const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(filePath, `<?php\n\nreturn [\n    'tables' => [\n    ],\n];\n`, 'utf8');
   }
 
-  const mergedTables = { ...existingTables };
+  let content = fs.readFileSync(filePath, 'utf8');
   let addedTablesCount = 0;
   let addedFieldsCount = 0;
 
-  for (const [tbl, fields] of Object.entries(newMappedTables || {})) {
-    if (!mergedTables[tbl]) {
-      mergedTables[tbl] = [];
-      addedTablesCount++;
-    }
-    for (const f of fields) {
-      if (!mergedTables[tbl].includes(f)) {
-        mergedTables[tbl].push(f);
-        addedFieldsCount++;
+  for (const [tbl, rawFields] of Object.entries(newMappedTables || {})) {
+    const fields = [...new Set(rawFields)].sort();
+    const tablePattern = new RegExp(`'${tbl}'\\s*=>\\s*\\[`);
+
+    if (tablePattern.test(content)) {
+      const match = content.match(tablePattern);
+      const startPos = match.index;
+      const fieldsIndex = content.indexOf("'fields' => [", startPos);
+
+      if (fieldsIndex !== -1) {
+        const closeBracketPos = content.indexOf(']', fieldsIndex);
+        if (closeBracketPos !== -1) {
+          const fieldsBlock = content.slice(fieldsIndex, closeBracketPos);
+          const existingFields = [];
+          const re = /'([^']+)'/g;
+          let m;
+          while ((m = re.exec(fieldsBlock))) {
+            if (m[1] !== 'fields') existingFields.push(m[1]);
+          }
+
+          const newFields = fields.filter(f => !existingFields.includes(f));
+          if (newFields.length > 0) {
+            let insertStr = '';
+            for (const nf of newFields) {
+              insertStr += `\n                '${nf}',`;
+              addedFieldsCount++;
+            }
+            content = content.slice(0, closeBracketPos) + insertStr + '\n            ' + content.slice(closeBracketPos);
+          }
+        }
+      }
+    } else {
+      const tablesIndex = content.indexOf("'tables' => [");
+      if (tablesIndex !== -1) {
+        addedTablesCount++;
+        const insertPos = tablesIndex + "'tables' => [".length;
+        let configStr = `\n        '${tbl}' => [\n            'primary_key' => 'id',\n            'fields' => [\n`;
+        for (const f of fields) {
+          configStr += `                '${f}',\n`;
+          addedFieldsCount++;
+        }
+        configStr += `            ],\n        ],\n`;
+        content = content.slice(0, insertPos) + configStr + content.slice(insertPos);
       }
     }
   }
 
-  let phpContent = `<?php\n\nreturn [\n`;
-  if (isNested) {
-    phpContent += `    'tables' => [\n`;
-    for (const [tbl, fields] of Object.entries(mergedTables)) {
-      phpContent += `        '${tbl}' => [\n`;
-      for (const f of fields) {
-        phpContent += `            '${f}',\n`;
-      }
-      phpContent += `        ],\n`;
-    }
-    phpContent += `    ],\n`;
-  } else {
-    for (const [tbl, fields] of Object.entries(mergedTables)) {
-      phpContent += `    '${tbl}' => [\n`;
-      for (const f of fields) {
-        phpContent += `        '${f}',\n`;
-      }
-      phpContent += `    ],\n`;
-    }
-  }
-  phpContent += `];\n`;
-
-  fs.writeFileSync(filePath, phpContent, 'utf8');
+  fs.writeFileSync(filePath, content, 'utf8');
 
   return {
     filePath,
-    mergedTables,
     addedTablesCount,
-    addedFieldsCount,
-    totalTables: Object.keys(mergedTables).length
+    addedFieldsCount
   };
+}
+
+function updateMiddlewareConfig(projectRoot, allFields) {
+  const fs = require('fs');
+  const path = require('path');
+  let baseDir = projectRoot || '';
+  const srcIdx = baseDir.lastIndexOf(path.sep + 'src');
+  if (srcIdx > 0) {
+    baseDir = baseDir.substring(0, srcIdx);
+  }
+
+  const middlewarePath = path.join(baseDir, 'app', 'Http', 'Middleware', 'AutoTranslateResponseMiddleware.php');
+  if (!fs.existsSync(middlewarePath)) return { updated: false };
+
+  let content = fs.readFileSync(middlewarePath, 'utf8');
+  const keyBlockPattern = /private static \$translatableKeys = \[(?:[^\]]+)\];/;
+  const match = content.match(keyBlockPattern);
+
+  if (match) {
+    const block = match[0];
+    const existingKeys = [];
+    const re = /'([^']+)'/g;
+    let m;
+    while ((m = re.exec(block))) {
+      existingKeys.push(m[1]);
+    }
+
+    const newKeys = [...new Set(allFields)].filter(f => !existingKeys.includes(f));
+    if (newKeys.length > 0) {
+      const insertPos = block.lastIndexOf('];');
+      if (insertPos !== -1) {
+        let insertStr = '';
+        for (const nk of newKeys) {
+          insertStr += `\n        '${nk}',`;
+        }
+        const newBlock = block.slice(0, insertPos) + insertStr + '\n    ' + block.slice(insertPos);
+        content = content.replace(block, newBlock);
+        fs.writeFileSync(middlewarePath, content, 'utf8');
+        return { updated: true, addedKeysCount: newKeys.length, middlewarePath };
+      }
+    }
+  }
+  return { updated: false, middlewarePath };
 }
 
 function resolveTranslationFilePath(config) {
@@ -528,8 +567,9 @@ module.exports = {
   httpPostJson,
   loginAndGetAuthHeaders,
   mapFieldsToTablesWithoutDb,
-  parseTranslationPhp,
+  parseTranslationPhp: writeTranslationPhp,
   writeTranslationPhp,
+  updateMiddlewareConfig,
   resolveTranslationFilePath
 };
 

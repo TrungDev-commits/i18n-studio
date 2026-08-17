@@ -6,7 +6,7 @@ const fs = require('fs');
 const { getConfig, saveConfig } = require('./services/configManager');
 const { collectFiles, extractFile, readExistingLang, slugify, formatReplacement, escapePhp } = require('./services/scanner');
 const { translateTexts } = require('./services/translator');
-const { httpGetJson, mapFieldsToTablesWithoutDb, writeTranslationPhp, resolveTranslationFilePath, loginAndGetAuthHeaders } = require('./services/apiScanner');
+const { httpGetJson, mapFieldsToTablesWithoutDb, writeTranslationPhp, updateMiddlewareConfig, resolveTranslationFilePath, loginAndGetAuthHeaders } = require('./services/apiScanner');
 
 const app = express();
 const PORT = 4000;
@@ -413,11 +413,21 @@ app.post('/api/extract/dynamic', async (req, res) => {
     }
 
     let writeResult = null;
+    let middlewareResult = null;
     if (writeToFile) {
       const targetPath = translationFilePath || resolveTranslationFilePath(config);
       broadcastLog(`📝 Đang tự động ghi/gộp kết quả vào file config: ${targetPath}...`);
       writeResult = writeTranslationPhp(targetPath, combinedMappedTables);
       broadcastLog(`🎉 Đã ghi thành công vào ${targetPath} (${writeResult.addedFieldsCount} trường mới trong ${writeResult.addedTablesCount} bảng mới).`);
+
+      const allFields = [];
+      for (const tbl of Object.keys(combinedMappedTables)) {
+        allFields.push(...combinedMappedTables[tbl]);
+      }
+      middlewareResult = updateMiddlewareConfig(config.projectRoot, allFields);
+      if (middlewareResult && middlewareResult.updated) {
+        broadcastLog(`🎉 Đã tự động bổ sung ${middlewareResult.addedKeysCount} trường mới vào AutoTranslateResponseMiddleware.php!`);
+      }
     }
 
     res.json({
@@ -425,6 +435,7 @@ app.post('/api/extract/dynamic', async (req, res) => {
       mappedTables: combinedMappedTables,
       rawSamples,
       writeResult,
+      middlewareResult,
       errors
     });
   } catch (err) {
@@ -433,7 +444,7 @@ app.post('/api/extract/dynamic', async (req, res) => {
   }
 });
 
-// Endpoint ghi trực tiếp mappedTables vào config/translation.php
+// Endpoint ghi trực tiếp mappedTables vào config/translation.php & Middleware
 app.post('/api/extract/dynamic/write', (req, res) => {
   try {
     const config = getConfig();
@@ -445,11 +456,21 @@ app.post('/api/extract/dynamic/write', (req, res) => {
     const targetPath = translationFilePath || resolveTranslationFilePath(config);
     broadcastLog(`📝 Đang thực hiện ghi kết quả vào file config: ${targetPath}...`);
     const writeResult = writeTranslationPhp(targetPath, mappedTables);
-    broadcastLog(`🎉 Đã ghi thành công vào ${targetPath} (${writeResult.addedFieldsCount} trường mới được gộp vào ${writeResult.totalTables} bảng).`);
+    broadcastLog(`🎉 Đã ghi thành công vào ${targetPath} (${writeResult.addedFieldsCount} trường mới).`);
+
+    const allFields = [];
+    for (const tbl of Object.keys(mappedTables)) {
+      allFields.push(...mappedTables[tbl]);
+    }
+    const middlewareResult = updateMiddlewareConfig(config.projectRoot, allFields);
+    if (middlewareResult && middlewareResult.updated) {
+      broadcastLog(`🎉 Đã tự động bổ sung ${middlewareResult.addedKeysCount} trường mới vào AutoTranslateResponseMiddleware.php!`);
+    }
 
     res.json({
       success: true,
-      writeResult
+      writeResult,
+      middlewareResult
     });
   } catch (err) {
     broadcastLog(`❌ Lỗi khi ghi file translation.php: ${err.message}`, 'error');
