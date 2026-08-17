@@ -375,6 +375,15 @@ button {
   color: var(--danger);
 }
 
+.btn-danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #dc2626;
+}
+
 .btn-sm {
   padding: 5px 11px;
   font-size: 12.5px;

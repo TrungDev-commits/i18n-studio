@@ -21,6 +21,7 @@ import {
   Search,
   Copy,
   Check,
+  Square,
 } from 'lucide-react';
 
 const VIEWS = {
@@ -32,6 +33,27 @@ const VIEWS = {
 const NAV_GROUPS = [
   { label: 'Hoạt động', items: ['static', 'dynamic'] },
   { label: 'Hệ thống', items: ['config'] },
+];
+
+const SUPPORTED_LANGUAGES = [
+  { code: 'zh', name: 'Tiếng Trung Giản thể (ZH)' },
+  { code: 'zh-TW', name: 'Tiếng Trung Phồn thể (ZH-TW)' },
+  { code: 'en', name: 'English (EN)' },
+  { code: 'ja', name: 'Tiếng Nhật (JA)' },
+  { code: 'ko', name: 'Tiếng Hàn (KO)' },
+  { code: 'th', name: 'Tiếng Thái (TH)' },
+  { code: 'lo', name: 'Tiếng Lào (LO)' },
+  { code: 'km', name: 'Tiếng Khmer (KM)' },
+  { code: 'fr', name: 'Tiếng Pháp (FR)' },
+  { code: 'de', name: 'Tiếng Đức (DE)' },
+  { code: 'es', name: 'Tiếng Tây Ban Nha (ES)' },
+  { code: 'ru', name: 'Tiếng Nga (RU)' },
+  { code: 'id', name: 'Tiếng Indonesia (ID)' },
+  { code: 'ms', name: 'Tiếng Mã Lai (MS)' },
+  { code: 'pt', name: 'Tiếng Bồ Đào Nha (PT)' },
+  { code: 'it', name: 'Tiếng Ý (IT)' },
+  { code: 'ar', name: 'Tiếng Ả Rập (AR)' },
+  { code: 'hi', name: 'Tiếng Ấn Độ / Hindi (HI)' },
 ];
 
 function logClass(message, type) {
@@ -54,6 +76,9 @@ export default function App() {
   const [activeModal, setActiveModal] = useState(null);
   const [modalSearch, setModalSearch] = useState('');
   const [copiedText, setCopiedText] = useState(null);
+  const [newLocaleForm, setNewLocaleForm] = useState({ code: '', name: '' });
+  const [selectedPreset, setSelectedPreset] = useState('');
+  const [addLocaleError, setAddLocaleError] = useState('');
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -102,6 +127,7 @@ export default function App() {
   });
 
   const logsEndRef = useRef(null);
+  const abortControllerRef = useRef(null);
 
   useEffect(() => {
     fetch('/api/config')
@@ -148,10 +174,21 @@ export default function App() {
     }
   };
 
+  const handleStopExtract = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setLoading(false);
+  };
+
   const handleRunStaticExtract = async () => {
     setLoading(true);
     setResults(null);
     setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: '--- BẮT ĐẦU PHIÊN QUÉT TĨNH MỚI ---', type: 'info' }]);
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
       const res = await fetch('/api/extract/static', {
@@ -160,7 +197,8 @@ export default function App() {
         body: JSON.stringify({
           ...config,
           ...options
-        })
+        }),
+        signal: controller.signal
       });
       const data = await res.json();
       if (data.success) {
@@ -169,8 +207,13 @@ export default function App() {
         setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ ${data.error}`, type: 'error' }]);
       }
     } catch (err) {
-      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ Lỗi kết nối API: ${err.message}`, type: 'error' }]);
+      if (err.name === 'AbortError') {
+        setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: '🛑 Đã dừng tiến trình quét tĩnh theo yêu cầu.', type: 'warn' }]);
+      } else {
+        setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ Lỗi kết nối API: ${err.message}`, type: 'error' }]);
+      }
     } finally {
+      abortControllerRef.current = null;
       setLoading(false);
     }
   };
@@ -180,11 +223,15 @@ export default function App() {
     setDynamicResults(null);
     setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: '--- BẮT ĐẦU QUÉT DỮ LIỆU ĐỘNG API ---', type: 'info' }]);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const res = await fetch('/api/extract/dynamic', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(dynamicForm)
+        body: JSON.stringify(dynamicForm),
+        signal: controller.signal
       });
       const data = await res.json();
       if (data.success) {
@@ -193,8 +240,13 @@ export default function App() {
         setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ ${data.error}`, type: 'error' }]);
       }
     } catch (err) {
-      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ ${err.message}`, type: 'error' }]);
+      if (err.name === 'AbortError') {
+        setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: '🛑 Đã dừng tiến trình quét API theo yêu cầu.', type: 'warn' }]);
+      } else {
+        setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ ${err.message}`, type: 'error' }]);
+      }
     } finally {
+      abortControllerRef.current = null;
       setLoading(false);
     }
   };
@@ -221,28 +273,44 @@ export default function App() {
     }
   };
 
-  const addLocale = () => {
-    const code = prompt('Nhập mã ngôn ngữ mới (ví dụ: ja, ko, th, fr):');
-    if (!code) return;
-    const name = prompt('Nhập tên hiển thị (ví dụ: Japanese, Korean):', code.toUpperCase());
-    if (config.locales.some(l => l.code === code.toLowerCase())) {
-      alert('Mã ngôn ngữ này đã tồn tại!');
+  const openAddLocaleModal = () => {
+    setNewLocaleForm({ code: '', name: '' });
+    setSelectedPreset('');
+    setAddLocaleError('');
+    setActiveModal('addLocale');
+  };
+
+  const handleAddLocaleSubmit = () => {
+    const code = newLocaleForm.code.trim().toLowerCase();
+    const name = newLocaleForm.name.trim() || code.toUpperCase();
+
+    if (!code) {
+      setAddLocaleError('Vui lòng nhập mã ngôn ngữ!');
       return;
     }
+    if (config?.locales?.some(l => l.code.trim().toLowerCase() === code)) {
+      setAddLocaleError('Mã ngôn ngữ này đã tồn tại!');
+      return;
+    }
+
     setConfig(prev => ({
       ...prev,
-      locales: [...prev.locales, { code: code.toLowerCase(), name: name || code.toUpperCase(), isSource: false, filePath: '' }]
+      locales: [...prev.locales, { code, name, isSource: false, filePath: '' }]
     }));
+    setActiveModal(null);
+    setNewLocaleForm({ code: '', name: '' });
+    setAddLocaleError('');
   };
 
   const removeLocale = (code) => {
-    if (code === 'vi') {
+    const targetCode = String(code).trim().toLowerCase();
+    if (targetCode === 'vi') {
       alert('Không thể xóa ngôn ngữ nguồn Tiếng Việt (VI)');
       return;
     }
     setConfig(prev => ({
       ...prev,
-      locales: prev.locales.filter(l => l.code !== code)
+      locales: prev.locales.filter(l => l.code.trim().toLowerCase() !== targetCode)
     }));
   };
 
@@ -273,7 +341,7 @@ export default function App() {
   }
 
   const renderModal = () => {
-    if (!activeModal || !results) return null;
+    if (!activeModal) return null;
 
     let title = '';
     let modalIcon = null;
@@ -285,7 +353,7 @@ export default function App() {
       title = 'Danh sách Files phân tích';
       modalIcon = <Files size={18} color="#38bdf8" />;
       
-      const fileList = results.files || [];
+      const fileList = results?.files || [];
       const filteredFiles = fileList.filter(f => 
         getRelativePath(f).toLowerCase().includes(modalSearch.toLowerCase())
       );
@@ -336,7 +404,7 @@ export default function App() {
       title = 'Chi tiết Vị trí phát hiện';
       modalIcon = <Activity size={18} color="#f59e0b" />;
 
-      const occList = results.occurrences || [];
+      const occList = results?.occurrences || [];
       const filteredOccs = occList.filter(occ => 
         (occ.vi || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
         (occ.key || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
@@ -429,7 +497,7 @@ export default function App() {
       title = isReusedType ? 'Danh sách Khóa tái sử dụng' : 'Danh sách Khóa mới sinh';
       modalIcon = isReusedType ? <RefreshCw size={18} color="#c084fc" /> : <SlidersHorizontal size={18} color="#22c55e" />;
 
-      const entries = (results.newEntries || []).filter(e => e.isReused === isReusedType);
+      const entries = (results?.newEntries || []).filter(e => e.isReused === isReusedType);
       const filteredEntries = entries.filter(e => 
         (e.key || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
         (e.vi || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
@@ -499,7 +567,7 @@ export default function App() {
       title = 'Cảnh báo duyệt';
       modalIcon = <AlertTriangle size={18} color="#ef4444" />;
 
-      const reviewList = results.reviews || [];
+      const reviewList = results?.reviews || [];
       const filteredReviews = reviewList.filter(rev => 
         (rev.msg || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
         getRelativePath(rev.file).toLowerCase().includes(modalSearch.toLowerCase())
@@ -548,6 +616,81 @@ export default function App() {
           </div>
         </div>
       );
+    } else if (activeModal === 'addLocale') {
+      title = 'Thêm Ngôn Ngữ Mới';
+      modalIcon = <Plus size={18} color="#22c55e" />;
+
+      content = (
+        <form onSubmit={(e) => { e.preventDefault(); handleAddLocaleSubmit(); }}>
+          <div style={{ display: 'grid', gap: 14 }}>
+            {addLocaleError && (
+              <div style={{ color: 'var(--danger)', fontSize: 13, background: 'var(--danger-dim)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+                ⚠️ {addLocaleError}
+              </div>
+            )}
+
+            <div>
+              <label className="field-label">Chọn ngôn ngữ hỗ trợ:</label>
+              <select
+                className="input-text"
+                value={selectedPreset}
+                onChange={e => {
+                  const val = e.target.value;
+                  setSelectedPreset(val);
+                  if (val === 'custom') {
+                    setNewLocaleForm({ code: '', name: '' });
+                  } else if (val) {
+                    const lang = SUPPORTED_LANGUAGES.find(l => l.code === val);
+                    if (lang) {
+                      setNewLocaleForm({ code: lang.code, name: lang.name });
+                    }
+                  }
+                  setAddLocaleError('');
+                }}
+              >
+                <option value="">-- Chọn từ danh sách ngôn ngữ hỗ trợ --</option>
+                {SUPPORTED_LANGUAGES.map(lang => {
+                  const isAdded = config?.locales?.some(l => l.code.trim().toLowerCase() === lang.code.toLowerCase());
+                  return (
+                    <option key={lang.code} value={lang.code} disabled={isAdded}>
+                      {lang.name} [{lang.code}] {isAdded ? '✓ (Đã có trong hệ thống)' : ''}
+                    </option>
+                  );
+                })}
+                <option value="custom">✏️ Nhập mã ngôn ngữ khác (Tùy chỉnh)...</option>
+              </select>
+            </div>
+
+            <div className="form-grid">
+              <div>
+                <label className="field-label">Mã ngôn ngữ (Language Code):</label>
+                <input
+                  type="text"
+                  className="input-text"
+                  placeholder="ví dụ: zh, ja, ko, th..."
+                  value={newLocaleForm.code}
+                  onChange={e => {
+                    setNewLocaleForm(prev => ({ ...prev, code: e.target.value }));
+                    setSelectedPreset('custom');
+                    setAddLocaleError('');
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="field-label">Tên hiển thị (Display Name):</label>
+                <input
+                  type="text"
+                  className="input-text"
+                  placeholder="ví dụ: Tiếng Trung (ZH)"
+                  value={newLocaleForm.name}
+                  onChange={e => setNewLocaleForm(prev => ({ ...prev, name: e.target.value }))}
+                />
+              </div>
+            </div>
+          </div>
+        </form>
+      );
     }
 
     return (
@@ -566,7 +709,14 @@ export default function App() {
             {content}
           </div>
           <div className="modal-footer">
-            <button className="btn btn-secondary" onClick={() => setActiveModal(null)}>Đóng</button>
+            {activeModal === 'addLocale' ? (
+              <>
+                <button className="btn btn-secondary" style={{ marginRight: 8 }} onClick={() => setActiveModal(null)}>Hủy</button>
+                <button className="btn btn-primary" onClick={handleAddLocaleSubmit}>Thêm Ngôn Ngữ</button>
+              </>
+            ) : (
+              <button className="btn btn-secondary" onClick={() => setActiveModal(null)}>Đóng</button>
+            )}
           </div>
         </div>
       </div>
@@ -675,15 +825,23 @@ export default function App() {
                     Tự động Refactor mã nguồn sang $t()
                   </label>
 
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleRunStaticExtract}
-                    disabled={loading}
-                    style={{ marginLeft: 'auto' }}
-                  >
-                    {loading ? <RefreshCw className="animate-spin" size={16} /> : <Play size={16} />}
-                    {loading ? 'Đang chạy...' : 'Bắt đầu Thực thi Quét'}
-                  </button>
+                  {loading ? (
+                    <button
+                      className="btn btn-danger"
+                      onClick={handleStopExtract}
+                      style={{ marginLeft: 'auto' }}
+                    >
+                      <Square size={14} fill="currentColor" /> Dừng Quét
+                    </button>
+                  ) : (
+                    <button
+                      className="btn btn-primary"
+                      onClick={handleRunStaticExtract}
+                      style={{ marginLeft: 'auto' }}
+                    >
+                      <Play size={16} /> Bắt đầu Thực thi Quét
+                    </button>
+                  )}
                 </div>
 
                 {results && (
@@ -733,8 +891,9 @@ export default function App() {
                             <th style={{ width: '30%' }}>Khóa (Key)</th>
                             <th style={{ width: '15%' }}>Trạng thái</th>
                             <th>Gốc (VI)</th>
-                            <th>Dịch (EN)</th>
-                            <th>Dịch (ZH)</th>
+                            {config.locales.filter(l => !l.isSource).map(loc => (
+                              <th key={loc.code}>Dịch ({loc.code.toUpperCase()})</th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody>
@@ -749,8 +908,9 @@ export default function App() {
                                 )}
                               </td>
                               <td>{row.vi}</td>
-                              <td>{row.en || '-'}</td>
-                              <td>{row.zh || '-'}</td>
+                              {config.locales.filter(l => !l.isSource).map(loc => (
+                                <td key={loc.code}>{row[loc.code] || '-'}</td>
+                              ))}
                             </tr>
                           ))}
                         </tbody>
@@ -793,15 +953,23 @@ export default function App() {
                     />
                   </div>
 
-                  <button
-                    className="btn btn-primary"
-                    style={{ justifySelf: 'flex-start', marginTop: 4 }}
-                    onClick={handleRunDynamicExtract}
-                    disabled={loading}
-                  >
-                    {loading ? <RefreshCw className="animate-spin" size={16} /> : <Play size={16} />}
-                    {loading ? 'Đang quét...' : 'Quét & Phân Tích Cấu Trúc'}
-                  </button>
+                  {loading ? (
+                    <button
+                      className="btn btn-danger"
+                      style={{ justifySelf: 'flex-start', marginTop: 4 }}
+                      onClick={handleStopExtract}
+                    >
+                      <Square size={14} fill="currentColor" /> Dừng Quét
+                    </button>
+                  ) : (
+                    <button
+                      className="btn btn-primary"
+                      style={{ justifySelf: 'flex-start', marginTop: 4 }}
+                      onClick={handleRunDynamicExtract}
+                    >
+                      <Play size={16} /> Quét & Phân Tích Cấu Trúc
+                    </button>
+                  )}
                 </div>
 
                 {dynamicResults && (
@@ -871,12 +1039,12 @@ export default function App() {
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <label className="field-label" style={{ marginBottom: 0 }}>Danh sách Ngôn ngữ Hỗ trợ:</label>
-                      <button className="btn btn-secondary btn-sm" onClick={addLocale}>
+                      <button className="btn btn-secondary btn-sm" onClick={openAddLocaleModal}>
                         <Plus size={14} /> Thêm ngôn ngữ
                       </button>
                     </div>
                     <div className="locale-list">
-                      {config.locales.map((loc, i) => (
+                      {config.locales.map((loc) => (
                         <div key={loc.code} className="locale-row">
                           <div className="locale-head">
                             <span className="chip">
@@ -896,9 +1064,11 @@ export default function App() {
                             placeholder={`Mặc định: resources/lang/${loc.code}/${config.langFileName || 'messages.php'}`}
                             value={loc.filePath || ''}
                             onChange={e => {
-                              const locales = [...config.locales];
-                              locales[i] = { ...locales[i], filePath: e.target.value };
-                              setConfig(prev => ({ ...prev, locales }));
+                              const val = e.target.value;
+                              setConfig(prev => ({
+                                ...prev,
+                                locales: prev.locales.map(l => l.code === loc.code ? { ...l, filePath: val } : l)
+                              }));
                             }}
                           />
                         </div>
@@ -925,6 +1095,15 @@ export default function App() {
             </span>
             <span className="t-count">{logs.length} dòng</span>
             <div className="t-actions">
+              {loading && (
+                <button
+                  className="btn btn-danger btn-sm"
+                  style={{ padding: '3px 9px', marginRight: 4 }}
+                  onClick={(e) => { e.stopPropagation(); handleStopExtract(); }}
+                >
+                  <Square size={12} fill="currentColor" /> Dừng
+                </button>
+              )}
               <button
                 className="btn btn-secondary btn-sm"
                 style={{ padding: '3px 9px' }}
