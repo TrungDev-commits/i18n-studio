@@ -4,17 +4,20 @@
     {
       "code": "vi",
       "name": "Tiếng Việt",
-      "isSource": true
+      "isSource": true,
+      "filePath": ""
     },
     {
       "code": "en",
       "name": "English (EN)",
-      "isSource": false
+      "isSource": false,
+      "filePath": ""
     },
     {
       "code": "zh",
       "name": "Chinese (ZH)",
-      "isSource": false
+      "isSource": false,
+      "filePath": ""
     }
   ],
   "scanPaths": [

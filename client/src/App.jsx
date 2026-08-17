@@ -188,7 +188,7 @@ export default function App() {
     }
     setConfig(prev => ({
       ...prev,
-      locales: [...prev.locales, { code: code.toLowerCase(), name: name || code.toUpperCase(), isSource: false }]
+      locales: [...prev.locales, { code: code.toLowerCase(), name: name || code.toUpperCase(), isSource: false, filePath: '' }]
     }));
   };
 
@@ -519,17 +519,32 @@ export default function App() {
                         <Plus size={14} /> Thêm ngôn ngữ
                       </button>
                     </div>
-                    <div className="chip-row">
-                      {config.locales.map(loc => (
-                        <div key={loc.code} className="chip">
-                          <code>{loc.code.toUpperCase()}</code>
-                          <small>({loc.name})</small>
-                          {loc.isSource && <small style={{ color: 'var(--accent)' }}>nguồn</small>}
-                          {!loc.isSource && (
-                            <span className="chip-del" onClick={() => removeLocale(loc.code)} role="button" aria-label={`Xóa ${loc.code}`}>
-                              <Trash2 size={13} />
+                    <div className="locale-list">
+                      {config.locales.map((loc, i) => (
+                        <div key={loc.code} className="locale-row">
+                          <div className="locale-head">
+                            <span className="chip">
+                              <code>{loc.code.toUpperCase()}</code>
+                              <small>({loc.name})</small>
+                              {loc.isSource && <small style={{ color: 'var(--accent)' }}>nguồn</small>}
                             </span>
-                          )}
+                            {!loc.isSource && (
+                              <button className="btn btn-danger-ghost btn-sm" onClick={() => removeLocale(loc.code)}>
+                                <Trash2 size={13} /> Xóa
+                              </button>
+                            )}
+                          </div>
+                          <input
+                            type="text"
+                            className="input-text"
+                            placeholder={`Mặc định: resources/lang/${loc.code}/${config.langFileName || 'messages.php'}`}
+                            value={loc.filePath || ''}
+                            onChange={e => {
+                              const locales = [...config.locales];
+                              locales[i] = { ...locales[i], filePath: e.target.value };
+                              setConfig(prev => ({ ...prev, locales }));
+                            }}
+                          />
                         </div>
                       ))}
                     </div>

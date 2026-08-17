@@ -71,30 +71,64 @@ app.post('/api/extract/static', async (req, res) => {
 
     broadcastLog(`🔎 Phát hiện ${occurrences.length} vị trí chuỗi tiếng Việt hardcode.`);
 
-    // Đọc các file ngôn ngữ hiện có
+    // Đọc các file ngôn ngữ hiện có (theo path tùy chỉnh hoặc mặc định)
     const sourceLocale = locales.find(l => l.isSource) || { code: 'vi' };
-    const sourceLangPath = path.join(projectRoot, 'resources', 'lang', sourceLocale.code, langFileName || 'messages.php');
-    const existingLang = readExistingLang(sourceLangPath);
+    const localeFiles = locales.map(loc => {
+      const p = (loc.filePath && String(loc.filePath).trim())
+        ? String(loc.filePath).trim()
+        : path.join(projectRoot, 'resources', 'lang', loc.code, langFileName || 'messages.php');
+      return { ...loc, path: p, lang: readExistingLang(p) };
+    });
+
+    // Gom tất cả key đã khai báo ở mọi file ngôn ngữ để tránh trùng
+    const allKeys = new Set();
+    localeFiles.forEach(lf => lf.lang.keys.forEach(k => allKeys.add(k)));
 
     const uniqueStrings = [];
     const viSet = new Set();
     const keyByVi = {};
+    let reusedCount = 0;
 
     for (const occ of occurrences) {
       const vi = occ.vi;
-      if (existingLang.valueKeyMap && existingLang.valueKeyMap[vi]) {
-        keyByVi[vi] = existingLang.valueKeyMap[vi];
+      if (viSet.has(vi)) continue;
+      viSet.add(vi);
+      uniqueStrings.push(vi);
+
+      // Nếu chuỗi đã được khai báo trong bất kỳ file ngôn ngữ nào → tái sử dụng key cũ
+      let existingKey = null;
+      for (const lf of localeFiles) {
+        if (lf.lang.valueKeyMap && lf.lang.valueKeyMap[vi]) {
+          existingKey = lf.lang.valueKeyMap[vi];
+          break;
+        }
+      }
+      if (existingKey) {
+        keyByVi[vi] = existingKey;
+        reusedCount++;
         continue;
       }
-      if (!viSet.has(vi)) {
-        viSet.add(vi);
-        uniqueStrings.push(vi);
+
+      // Chưa khai báo → sinh key mới
+      let base = slugify(vi);
+      if (!base) base = 'chuoi';
+      let key = (prefix || 'text_') + base;
+      let n = 2;
+      while (allKeys.has(key)) {
+        key = `${prefix || 'text_'}${base}_${n}`;
+        n++;
       }
+      allKeys.add(key);
+      keyByVi[vi] = key;
     }
 
-    broadcastLog(`✨ Số chuỗi tiếng Việt mới cần tạo khóa: ${uniqueStrings.length}`);
+    broadcastLog(`✨ Tổng số chuỗi: ${uniqueStrings.length} (${reusedCount} đã có key, ${uniqueStrings.length - reusedCount} key mới).`);
 
-    // Dịch các ngôn ngữ đích
+    for (const occ of occurrences) {
+      occ.key = keyByVi[occ.vi];
+    }
+
+    // Dịch các ngôn ngữ đích (chỉ dịch chuỗi nào còn thiếu trong file của ngôn ngữ đó)
     const translations = {};
     translations[sourceLocale.code] = {};
     uniqueStrings.forEach(s => translations[sourceLocale.code][s] = s);
@@ -102,29 +136,24 @@ app.post('/api/extract/static', async (req, res) => {
     const targetLocales = locales.filter(l => !l.isSource);
     if (!dryRun && uniqueStrings.length > 0) {
       for (const loc of targetLocales) {
-        broadcastLog(`🌐 Bắt đầu dịch sang [${loc.code.toUpperCase()}]...`);
-        const translatedMap = await translateTexts(uniqueStrings, loc.code, (msg) => broadcastLog(msg));
-        translations[loc.code] = translatedMap;
+        const lf = localeFiles.find(x => x.code === loc.code);
+        const existingValues = {};
+        const needTranslate = [];
+        for (const vi of uniqueStrings) {
+          const key = keyByVi[vi];
+          if (lf.lang.keyValueMap && lf.lang.keyValueMap[key]) {
+            existingValues[vi] = lf.lang.keyValueMap[key];
+          } else {
+            needTranslate.push(vi);
+          }
+        }
+        translations[loc.code] = { ...existingValues };
+        if (needTranslate.length > 0) {
+          broadcastLog(`🌐 Bắt đầu dịch sang [${loc.code.toUpperCase()}] (${needTranslate.length} chuỗi mới)...`);
+          const translatedMap = await translateTexts(needTranslate, loc.code, (msg) => broadcastLog(msg));
+          needTranslate.forEach(vi => translations[loc.code][vi] = translatedMap[vi]);
+        }
       }
-    }
-
-    // Sinh khóa key snake_case
-    const existingKeys = new Set(existingLang.keys);
-    for (const vi of uniqueStrings) {
-      let base = slugify(vi);
-      if (!base) base = 'chuoi';
-      let key = (prefix || 'text_') + base;
-      let n = 2;
-      while (existingKeys.has(key)) {
-        key = `${prefix || 'text_'}${base}_${n}`;
-        n++;
-      }
-      existingKeys.add(key);
-      keyByVi[vi] = key;
-    }
-
-    for (const occ of occurrences) {
-      occ.key = keyByVi[occ.vi];
     }
 
     // Tổ chức danh sách kết quả
@@ -139,21 +168,25 @@ app.post('/api/extract/static', async (req, res) => {
     // Nếu không phải dryRun và bật autoRefactor
     if (!dryRun && autoRefactor) {
       broadcastLog(`🛠️ Đang cập nhật và refactor trực tiếp vào mã nguồn dự án...`);
-      // Cập nhật các file messages.php
-      for (const loc of locales) {
-        const p = path.join(projectRoot, 'resources', 'lang', loc.code, langFileName || 'messages.php');
-        if (fs.existsSync(p)) {
-          const src = fs.readFileSync(p, 'utf8');
-          const marker = '];';
-          const idx = src.lastIndexOf(marker);
-          if (idx >= 0) {
-            const block = newEntries
-              .map(e => `    '${escapePhp(e.key)}' => '${escapePhp(e[loc.code] || e.vi)}',`)
-              .join('\n');
-            const out = src.slice(0, idx) + block + '\n' + src.slice(idx);
-            fs.writeFileSync(p, out, 'utf8');
-            broadcastLog(`   -> Đã ghi thêm ${newEntries.length} khóa vào: resources/lang/${loc.code}/${langFileName}`);
-          }
+      // Cập nhật các file messages.php: chỉ ghi thêm khóa còn thiếu trong từng file
+      for (const lf of localeFiles) {
+        const p = lf.path;
+        const missing = newEntries.filter(e => !lf.lang.keys.has(e.key));
+        if (missing.length === 0) continue;
+
+        if (!fs.existsSync(p)) {
+          fs.writeFileSync(p, `<?php\n\nreturn [\n];\n`, 'utf8');
+        }
+        const src = fs.readFileSync(p, 'utf8');
+        const marker = '];';
+        const idx = src.lastIndexOf(marker);
+        if (idx >= 0) {
+          const block = missing
+            .map(e => `    '${escapePhp(e.key)}' => '${escapePhp(e[lf.code] || e.vi)}',`)
+            .join('\n');
+          const out = src.slice(0, idx) + block + '\n' + src.slice(idx);
+          fs.writeFileSync(p, out, 'utf8');
+          broadcastLog(`   -> Đã ghi thêm ${missing.length} khóa vào: ${p}`);
         }
       }
 
@@ -192,7 +225,8 @@ app.post('/api/extract/static', async (req, res) => {
       stats: {
         totalFiles: files.length,
         totalOccurrences: occurrences.length,
-        newKeysCount: uniqueStrings.length,
+        newKeysCount: uniqueStrings.length - reusedCount,
+        reusedKeysCount: reusedCount,
         reviewsCount: reviews.length
       },
       newEntries,
