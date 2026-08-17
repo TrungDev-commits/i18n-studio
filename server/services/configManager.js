@@ -36,6 +36,7 @@ const DEFAULT_CONFIG = {
   translationFilePath: 'D:\\H_SourceCode\\SAAS\\bandoso_daklak\\config\\translation.php',
   auth: {
     enabled: false,
+    authMethod: 'POST',
     authUrl: 'https://bandoso-daklak.rynansaas.com/api/v1/auth/login',
     username: '',
     password: '',

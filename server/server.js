@@ -326,11 +326,15 @@ app.post('/api/auth/test-login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Thiếu URL Đăng nhập hoặc Tên tài khoản' });
     }
     broadcastLog(`🔐 Đang kiểm tra đăng nhập Admin API tại: ${authConfig.authUrl}...`);
-    const { headers, token } = await loginAndGetAuthHeaders({ ...authConfig, enabled: true });
-    broadcastLog(`🔑 Đăng nhập thành công! Token: ${token ? (token.slice(0, 15) + '...') : 'Đã nhận Cookie'}`);
+    const { headers, token, csrfToken } = await loginAndGetAuthHeaders({ ...authConfig, enabled: true });
+    
+    const modeInfo = token ? `Bearer Token (${token.slice(0, 15)}...)` : `Session Cookie ${csrfToken ? '& CSRF Token' : ''}`;
+    broadcastLog(`🔑 Đăng nhập thành công! Chế độ xác thực: ${modeInfo}`);
+    
     res.json({
       success: true,
       token,
+      csrfToken,
       headers
     });
   } catch (err) {

@@ -11,6 +11,7 @@ function httpGetJson(url, customHeaders = {}) {
       {
         headers: {
           'X-App-Locale': 'vi',
+          'X-Requested-With': 'XMLHttpRequest',
           Accept: 'application/json',
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
@@ -55,6 +56,143 @@ function httpPostJson(url, bodyData, customHeaders = {}) {
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(postData),
+          'X-Requested-With': 'XMLHttpRequest',
+          Accept: 'application/json, text/html, */*',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+          ...customHeaders
+        }
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode >= 400) {
+            return reject(new Error(`HTTP Error ${res.statusCode}: ${data.slice(0, 300)}`));
+          }
+          let parsedData = data;
+          try {
+            parsedData = JSON.parse(data);
+          } catch (e) {
+            // Bỏ qua nếu phản hồi trả về HTML redirect
+          }
+          resolve({ data: parsedData, headers: res.headers, statusCode: res.statusCode });
+        });
+      }
+    );
+
+    req.on('error', (err) => reject(err));
+    req.setTimeout(10000, () => {
+      req.abort();
+      reject(new Error('Request timeout khi gọi API đăng nhập'));
+    });
+
+    req.write(postData);
+    req.end();
+  });
+}
+
+function httpPostForm(url, bodyData, customHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const client = urlObj.protocol === 'https:' ? https : http;
+
+    const params = new URLSearchParams();
+    for (const key of Object.keys(bodyData)) {
+      if (bodyData[key] !== undefined && bodyData[key] !== null) {
+        params.append(key, bodyData[key]);
+      }
+    }
+    const postData = params.toString();
+
+    const req = client.request(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Length': Buffer.byteLength(postData),
+          'X-Requested-With': 'XMLHttpRequest',
+          Accept: 'application/json, text/html, */*',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+          ...customHeaders
+        }
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode >= 400) {
+            return reject(new Error(`HTTP Error ${res.statusCode}: ${data.slice(0, 200)}`));
+          }
+          let parsedData = data;
+          try {
+            parsedData = JSON.parse(data);
+          } catch (e) {
+            // Bỏ qua nếu là HTML redirect
+          }
+          resolve({ data: parsedData, headers: res.headers, statusCode: res.statusCode });
+        });
+      }
+    );
+
+    req.on('error', (err) => reject(err));
+    req.setTimeout(10000, () => {
+      req.abort();
+      reject(new Error('Request timeout khi gọi API đăng nhập'));
+    });
+
+    req.write(postData);
+    req.end();
+  });
+}
+
+function httpGetRaw(url, customHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    const req = client.get(
+      url,
+      {
+        headers: {
+          'X-App-Locale': 'vi',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+          ...customHeaders
+        }
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          resolve({ body: data, headers: res.headers, statusCode: res.statusCode });
+        });
+      }
+    );
+    req.on('error', (err) => reject(err));
+    req.setTimeout(10000, () => {
+      req.abort();
+      reject(new Error('Request timeout khi khởi tạo session'));
+    });
+  });
+}
+
+function httpGetJsonWithHeaders(url, customHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    const req = client.get(
+      url,
+      {
+        headers: {
+          'X-App-Locale': 'vi',
+          'X-Requested-With': 'XMLHttpRequest',
           Accept: 'application/json',
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
@@ -73,43 +211,140 @@ function httpPostJson(url, bodyData, customHeaders = {}) {
           try {
             resolve({ data: JSON.parse(data), headers: res.headers });
           } catch (e) {
-            reject(new Error(`Không thể parse JSON phản hồi đăng nhập: ${e.message}`));
+            reject(new Error(`Không thể parse JSON: ${e.message}`));
           }
         });
       }
     );
-
     req.on('error', (err) => reject(err));
     req.setTimeout(10000, () => {
       req.abort();
-      reject(new Error('Request timeout khi gọi API đăng nhập'));
+      reject(new Error('Request timeout'));
     });
-
-    req.write(postData);
-    req.end();
   });
 }
 
 async function loginAndGetAuthHeaders(authConfig) {
-  if (!authConfig || !authConfig.enabled || !authConfig.authUrl || !authConfig.username) {
+  if (!authConfig || !authConfig.enabled || !authConfig.authUrl) {
     return {};
   }
 
-  const { authUrl, username, password, tokenHeader = 'Authorization', tokenPrefix = 'Bearer ' } = authConfig;
+  const { authUrl, username, password, tokenHeader = 'Authorization', tokenPrefix = 'Bearer ', authMethod = 'POST' } = authConfig;
+  const method = (authMethod || 'POST').toUpperCase();
+  let response;
+
+  const base64Password = Buffer.from(password || '').toString('base64');
 
   const payload = {
+    // Cách 1: Web Admin (/login hoặc /login-guess)
+    UserCode: username,
+    Password: base64Password,
+    // Cách 2: Mobile / App API (/api/app/auth/login)
     username: username,
     email: username,
     password: password
   };
 
-  const response = await httpPostJson(authUrl, payload);
+  // Bước 1: Khởi tạo Session Cookie (laravel_session & XSRF-TOKEN) bằng GET HTML trước khi gửi POST
+  let preHeaders = {
+    'X-Requested-With': 'XMLHttpRequest'
+  };
+
+  try {
+    const initRes = await httpGetRaw(authUrl);
+
+    // Lấy tất cả Cookie khởi tạo (laravel_session, XSRF-TOKEN...)
+    if (initRes.headers && initRes.headers['set-cookie']) {
+      const setCookies = initRes.headers['set-cookie'];
+      preHeaders['Cookie'] = setCookies.map(c => c.split(';')[0]).join('; ');
+
+      // Lấy XSRF-TOKEN từ Cookie nếu có
+      const xsrfMatch = preHeaders['Cookie'].match(/XSRF-TOKEN=([^;]+)/);
+      if (xsrfMatch) {
+        const tokenVal = decodeURIComponent(xsrfMatch[1]);
+        preHeaders['X-XSRF-TOKEN'] = tokenVal;
+        preHeaders['X-CSRF-TOKEN'] = tokenVal;
+        payload._token = tokenVal;
+      }
+    }
+
+    // Trích xuất CSRF Token từ HTML meta/input nếu có
+    if (initRes.body && typeof initRes.body === 'string') {
+      const metaMatch = initRes.body.match(/<meta\s+name=["']csrf-token["']\s+content=["']([^"']+)["']/i);
+      const inputMatch = initRes.body.match(/<input\s+[^>]*name=["']_token["']\s+value=["']([^"']+)["']/i);
+      const htmlCsrf = metaMatch ? metaMatch[1] : (inputMatch ? inputMatch[1] : null);
+      if (htmlCsrf) {
+        preHeaders['X-CSRF-TOKEN'] = htmlCsrf;
+        preHeaders['X-XSRF-TOKEN'] = htmlCsrf;
+        payload._token = htmlCsrf;
+      }
+    }
+  } catch (initErr) {
+    // Bỏ qua nếu GET khởi tạo session bị lỗi mạng
+  }
+
+  // Bước 2: Gửi request Đăng nhập kèm Session Cookie đã khởi tạo
+  if (method === 'GET') {
+    const urlObj = new URL(authUrl);
+    if (username) {
+      urlObj.searchParams.set('username', username);
+      urlObj.searchParams.set('UserCode', username);
+    }
+    if (password) {
+      urlObj.searchParams.set('password', password);
+      urlObj.searchParams.set('Password', base64Password);
+    }
+    response = await httpGetJsonWithHeaders(urlObj.toString(), preHeaders);
+  } else {
+    try {
+      // Ưu tiên gửi JSON
+      response = await httpPostJson(authUrl, payload, preHeaders);
+    } catch (err) {
+      // Fallback sang x-www-form-urlencoded nếu JSON thất bại
+      response = await httpPostForm(authUrl, payload, preHeaders);
+    }
+  }
+
   const resData = response.data;
 
+  // Kiểm tra cờ success nếu phản hồi trả về JSON
+  if (resData && typeof resData === 'object' && resData.success === false) {
+    throw new Error(resData.message || resData.error || 'Đăng nhập không thành công (success = false)');
+  }
+
+  // Bước 3: Gom tất cả Header Xác thực (Cookie laravel_session + Token) cho các request tiếp theo
+  const finalHeaders = {
+    'X-Requested-With': 'XMLHttpRequest'
+  };
+
+  const allCookiesMap = {};
+  if (preHeaders['Cookie']) {
+    preHeaders['Cookie'].split('; ').forEach(c => {
+      const [k, v] = c.split('=');
+      if (k) allCookiesMap[k] = v;
+    });
+  }
+
+  if (response.headers && response.headers['set-cookie']) {
+    response.headers['set-cookie'].forEach(c => {
+      const pair = c.split(';')[0];
+      const [k, v] = pair.split('=');
+      if (k) allCookiesMap[k] = v;
+    });
+  }
+
+  const mergedCookieStr = Object.entries(allCookiesMap).map(([k, v]) => `${k}=${v}`).join('; ');
+  if (mergedCookieStr) {
+    finalHeaders['Cookie'] = mergedCookieStr;
+  }
+
+  // 1. Trích xuất Bearer Token (Mobile API)
   let token = null;
   if (typeof resData === 'string') {
-    token = resData;
-  } else if (resData) {
+    if (!resData.includes('<html')) {
+      token = resData;
+    }
+  } else if (resData && typeof resData === 'object') {
     token =
       resData.access_token ||
       resData.token ||
@@ -118,21 +353,26 @@ async function loginAndGetAuthHeaders(authConfig) {
       (resData.result && (resData.result.token || resData.result.access_token));
   }
 
-  const headers = {};
   if (token) {
     const prefix = tokenPrefix !== undefined ? tokenPrefix : 'Bearer ';
-    headers[tokenHeader || 'Authorization'] = `${prefix}${token}`.trim();
+    finalHeaders[tokenHeader || 'Authorization'] = `${prefix}${token}`.trim();
   }
 
-  if (response.headers && response.headers['set-cookie']) {
-    headers['Cookie'] = response.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');
+  // 2. Trích xuất CSRF Token (Web Admin)
+  const csrfToken = (resData && typeof resData === 'object')
+    ? (resData.csrf_token || (resData.data && resData.data.csrf_token) || resData._token)
+    : (preHeaders['X-CSRF-TOKEN'] || null);
+
+  if (csrfToken) {
+    finalHeaders['X-CSRF-TOKEN'] = csrfToken;
+    finalHeaders['X-XSRF-TOKEN'] = csrfToken;
   }
 
-  if (!token && !headers['Cookie']) {
-    throw new Error('Đăng nhập thành công nhưng không tìm thấy token hoặc cookie xác thực trong kết quả trả về');
+  if (!token && !finalHeaders['Cookie'] && !csrfToken) {
+    throw new Error('Đăng nhập thành công nhưng không tìm thấy token hoặc cookie laravel_session trong kết quả trả về');
   }
 
-  return { headers, token, rawResponse: resData };
+  return { headers: finalHeaders, token, csrfToken, rawResponse: resData };
 }
 
 function mapFieldsToTablesWithoutDb(jsonData, mainTable) {

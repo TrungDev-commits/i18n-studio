@@ -227,9 +227,12 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
+        const info = data.token
+          ? `JWT Bearer Token: ${data.token.slice(0, 25)}...`
+          : `Session Cookie (laravel_session) ${data.csrfToken ? '+ CSRF Token' : ''}`;
         setLoginTestResult({
           success: true,
-          message: `✅ Đăng nhập thành công! ${data.token ? `Token: ${data.token.slice(0, 25)}...` : 'Đã nhận Session Cookie'}`
+          message: `✅ Đăng nhập thành công! [${info}]`
         });
       } else {
         setLoginTestResult({ success: false, message: `❌ ${data.error}` });
@@ -1130,15 +1133,28 @@ export default function App() {
 
                     {dynamicForm.auth.enabled && (
                       <div style={{ marginTop: 14, display: 'grid', gap: 12 }}>
-                        <div>
-                          <label className="field-label">URL API Đăng Nhập Admin (Auth Login URL):</label>
-                          <input
-                            type="text"
-                            className="input-text"
-                            placeholder="https://bandoso-daklak.rynansaas.com/api/v1/auth/login"
-                            value={dynamicForm.auth.authUrl}
-                            onChange={e => handleAuthChange('authUrl', e.target.value)}
-                          />
+                        <div style={{ display: 'flex', gap: 10 }}>
+                          <div style={{ width: 110 }}>
+                            <label className="field-label">Phương thức:</label>
+                            <select
+                              className="input-text"
+                              value={dynamicForm.auth.authMethod || 'POST'}
+                              onChange={e => handleAuthChange('authMethod', e.target.value)}
+                            >
+                              <option value="POST">POST</option>
+                              <option value="GET">GET</option>
+                            </select>
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <label className="field-label">URL API Đăng Nhập Admin (Auth Login URL):</label>
+                            <input
+                              type="text"
+                              className="input-text"
+                              placeholder="https://bandoso-daklak.rynansaas.com/api/v1/auth/login"
+                              value={dynamicForm.auth.authUrl}
+                              onChange={e => handleAuthChange('authUrl', e.target.value)}
+                            />
+                          </div>
                         </div>
 
                         <div className="form-grid">
