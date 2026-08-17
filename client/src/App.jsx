@@ -117,9 +117,27 @@ export default function App() {
   };
 
   const [dynamicForm, setDynamicForm] = useState({
-    apiUrl: 'https://bandoso-daklak.rynansaas.com/api-ui/quan-ly-gioi-thieu-xa-phuong/get-active-communes',
-    tableName: 'gioi_thieu_xa_phuong'
+    items: [
+      {
+        id: '1',
+        apiUrl: 'https://bandoso-daklak.rynansaas.com/api-ui/quan-ly-gioi-thieu-xa-phuong/get-active-communes',
+        tableName: 'gioi_thieu_xa_phuong'
+      }
+    ],
+    writeToFile: false,
+    translationFilePath: 'D:\\H_SourceCode\\SAAS\\bandoso_daklak\\config\\translation.php',
+    auth: {
+      enabled: false,
+      authUrl: 'https://bandoso-daklak.rynansaas.com/api/v1/auth/login',
+      username: '',
+      password: '',
+      tokenHeader: 'Authorization',
+      tokenPrefix: 'Bearer '
+    }
   });
+
+  const [testingLogin, setTestingLogin] = useState(false);
+  const [loginTestResult, setLoginTestResult] = useState(null);
 
   const [options, setOptions] = useState({
     dryRun: true,
@@ -136,6 +154,12 @@ export default function App() {
         if (data.success) {
           setConfig(data.data);
           setServerOnline(true);
+          setDynamicForm(prev => ({
+            ...prev,
+            items: (data.data.apiItems && Array.isArray(data.data.apiItems) && data.data.apiItems.length > 0) ? data.data.apiItems : prev.items,
+            translationFilePath: data.data.translationFilePath || prev.translationFilePath,
+            auth: data.data.auth ? { ...prev.auth, ...data.data.auth } : prev.auth
+          }));
         }
       })
       .catch(err => console.error('Lỗi load config:', err));
@@ -157,6 +181,114 @@ export default function App() {
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
+
+  const handleAddApiItem = () => {
+    setDynamicForm(prev => ({
+      ...prev,
+      items: [
+        ...prev.items,
+        { id: String(Date.now()), apiUrl: '', tableName: '' }
+      ]
+    }));
+  };
+
+  const handleRemoveApiItem = (id) => {
+    setDynamicForm(prev => ({
+      ...prev,
+      items: prev.items.filter(item => item.id !== id)
+    }));
+  };
+
+  const handleApiItemChange = (id, field, value) => {
+    setDynamicForm(prev => ({
+      ...prev,
+      items: prev.items.map(item => item.id === id ? { ...item, [field]: value } : item)
+    }));
+  };
+
+  const handleAuthChange = (field, value) => {
+    setDynamicForm(prev => ({
+      ...prev,
+      auth: {
+        ...prev.auth,
+        [field]: value
+      }
+    }));
+  };
+
+  const handleTestLogin = async () => {
+    setTestingLogin(true);
+    setLoginTestResult(null);
+    try {
+      const res = await fetch('/api/auth/test-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dynamicForm.auth)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setLoginTestResult({
+          success: true,
+          message: `✅ Đăng nhập thành công! ${data.token ? `Token: ${data.token.slice(0, 25)}...` : 'Đã nhận Session Cookie'}`
+        });
+      } else {
+        setLoginTestResult({ success: false, message: `❌ ${data.error}` });
+      }
+    } catch (err) {
+      setLoginTestResult({ success: false, message: `❌ Lỗi kết nối API đăng nhập: ${err.message}` });
+    } finally {
+      setTestingLogin(false);
+    }
+  };
+
+  const handleSaveApiItemsConfig = async () => {
+    const newConfig = {
+      ...config,
+      apiItems: dynamicForm.items,
+      translationFilePath: dynamicForm.translationFilePath,
+      auth: dynamicForm.auth
+    };
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setConfig(newConfig);
+        setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: '💾 Đã lưu danh sách API, xác thực Admin và đường dẫn config translation.php thành công!', type: 'info' }]);
+      }
+    } catch (err) {
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ Lỗi lưu cấu hình: ${err.message}`, type: 'error' }]);
+    }
+  };
+
+  const handleWriteTranslationFile = async () => {
+    if (!dynamicResults || !dynamicResults.mappedTables) return;
+    setLoading(true);
+    try {
+      const res = await fetch('/api/extract/dynamic/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mappedTables: dynamicResults.mappedTables,
+          translationFilePath: dynamicForm.translationFilePath
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDynamicResults(prev => ({ ...prev, writeResult: data.writeResult }));
+        setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `🎉 Đã ghi thành công vào file ${data.writeResult.filePath}!`, type: 'info' }]);
+      } else {
+        setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ ${data.error}`, type: 'error' }]);
+      }
+    } catch (err) {
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ ${err.message}`, type: 'error' }]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSaveConfig = async () => {
     try {
@@ -230,7 +362,12 @@ export default function App() {
       const res = await fetch('/api/extract/dynamic', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(dynamicForm),
+        body: JSON.stringify({
+          items: dynamicForm.items,
+          writeToFile: dynamicForm.writeToFile,
+          translationFilePath: dynamicForm.translationFilePath,
+          auth: dynamicForm.auth
+        }),
         signal: controller.signal
       });
       const data = await res.json();
@@ -927,31 +1064,175 @@ export default function App() {
             <div>
               <div className="view-head">
                 <div>
-                  <h2><Database size={19} color="#38bdf8" /> Phân Tích API / Database</h2>
-                  <p>Gọi API thực tế để phát hiện các trường dữ liệu tiếng Việt cần dịch</p>
+                  <h2><Database size={19} color="#38bdf8" /> Phân Tích API & Database</h2>
+                  <p>Gọi các API thực tế để phát hiện các trường tiếng Việt cần dịch và ghi vào config/translation.php</p>
                 </div>
               </div>
 
-              <div className="card">
-                <div style={{ display: 'grid', gap: 14 }}>
+              <div className="card" style={{ marginBottom: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>
+                    📋 Danh sách API URLs & Bảng DB tương ứng ({dynamicForm.items.length})
+                  </h3>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn btn-secondary btn-sm" onClick={handleAddApiItem}>
+                      <Plus size={14} /> Thêm URL API
+                    </button>
+                    <button className="btn btn-secondary btn-sm" onClick={handleSaveApiItemsConfig}>
+                      Lưu cấu hình API
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {dynamicForm.items.map((item, idx) => (
+                    <div key={item.id || idx} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', width: 20 }}>#{idx + 1}</span>
+                      <input
+                        type="text"
+                        className="input-text"
+                        placeholder="API URL (ví dụ: https://bandoso-daklak.rynansaas.com/api/v1/public/cay-trong)"
+                        style={{ flex: 2 }}
+                        value={item.apiUrl}
+                        onChange={e => handleApiItemChange(item.id, 'apiUrl', e.target.value)}
+                      />
+                      <input
+                        type="text"
+                        className="input-text"
+                        placeholder="Tên bảng DB (ví dụ: nongnghiep_caytrong)"
+                        style={{ flex: 1 }}
+                        value={item.tableName}
+                        onChange={e => handleApiItemChange(item.id, 'tableName', e.target.value)}
+                      />
+                      {dynamicForm.items.length > 1 && (
+                        <button
+                          className="btn btn-icon btn-danger-ghost"
+                          title="Xóa URL này"
+                          onClick={() => handleRemoveApiItem(item.id)}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)', display: 'grid', gap: 14 }}>
+                  <div style={{ background: 'var(--bg-inset)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 14 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', userSelect: 'none' }}>
+                      <input
+                        type="checkbox"
+                        checked={dynamicForm.auth.enabled}
+                        onChange={e => handleAuthChange('enabled', e.target.checked)}
+                      />
+                      <span>🔐 Sử dụng Xác thực / Đăng nhập Admin (Dành cho API yêu cầu đăng nhập)</span>
+                    </label>
+
+                    {dynamicForm.auth.enabled && (
+                      <div style={{ marginTop: 14, display: 'grid', gap: 12 }}>
+                        <div>
+                          <label className="field-label">URL API Đăng Nhập Admin (Auth Login URL):</label>
+                          <input
+                            type="text"
+                            className="input-text"
+                            placeholder="https://bandoso-daklak.rynansaas.com/api/v1/auth/login"
+                            value={dynamicForm.auth.authUrl}
+                            onChange={e => handleAuthChange('authUrl', e.target.value)}
+                          />
+                        </div>
+
+                        <div className="form-grid">
+                          <div>
+                            <label className="field-label">Tài khoản / Username / Email:</label>
+                            <input
+                              type="text"
+                              className="input-text"
+                              placeholder="admin"
+                              value={dynamicForm.auth.username}
+                              onChange={e => handleAuthChange('username', e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="field-label">Mật khẩu / Password:</label>
+                            <input
+                              type="password"
+                              className="input-text"
+                              placeholder="••••••••"
+                              value={dynamicForm.auth.password}
+                              onChange={e => handleAuthChange('password', e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="form-grid">
+                          <div>
+                            <label className="field-label">Tên Header xác thực (Token Header):</label>
+                            <input
+                              type="text"
+                              className="input-text"
+                              placeholder="Authorization"
+                              value={dynamicForm.auth.tokenHeader}
+                              onChange={e => handleAuthChange('tokenHeader', e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="field-label">Tiền tố Token (Prefix):</label>
+                            <input
+                              type="text"
+                              className="input-text"
+                              placeholder="Bearer "
+                              value={dynamicForm.auth.tokenPrefix}
+                              onChange={e => handleAuthChange('tokenPrefix', e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={handleTestLogin}
+                            disabled={testingLogin}
+                          >
+                            {testingLogin ? 'Đang kiểm tra...' : '🔑 Kiểm tra Đăng Nhập thử'}
+                          </button>
+                        </div>
+
+                        {loginTestResult && (
+                          <div style={{
+                            padding: '8px 12px',
+                            borderRadius: 'var(--radius-sm)',
+                            fontSize: 12,
+                            background: loginTestResult.success ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                            color: loginTestResult.success ? '#22c55e' : '#ef4444',
+                            border: `1px solid ${loginTestResult.success ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`
+                          }}>
+                            {loginTestResult.message}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   <div>
-                    <label className="field-label">Đường dẫn API URL kiểm tra:</label>
+                    <label className="field-label">Đường dẫn file config translation PHP (config/translation.php):</label>
                     <input
                       type="text"
                       className="input-text"
-                      value={dynamicForm.apiUrl}
-                      onChange={e => setDynamicForm(prev => ({ ...prev, apiUrl: e.target.value }))}
+                      placeholder="D:\H_SourceCode\SAAS\bandoso_daklak\config\translation.php"
+                      value={dynamicForm.translationFilePath}
+                      onChange={e => setDynamicForm(prev => ({ ...prev, translationFilePath: e.target.value }))}
                     />
                   </div>
-                  <div>
-                    <label className="field-label">Tên bảng Database tương ứng:</label>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', userSelect: 'none' }}>
                     <input
-                      type="text"
-                      className="input-text"
-                      value={dynamicForm.tableName}
-                      onChange={e => setDynamicForm(prev => ({ ...prev, tableName: e.target.value }))}
+                      type="checkbox"
+                      checked={dynamicForm.writeToFile}
+                      onChange={e => setDynamicForm(prev => ({ ...prev, writeToFile: e.target.checked }))}
                     />
-                  </div>
+                    <span>Tự động ghi/gộp kết quả vào file config/translation.php sau khi quét</span>
+                  </label>
 
                   {loading ? (
                     <button
@@ -967,26 +1248,50 @@ export default function App() {
                       style={{ justifySelf: 'flex-start', marginTop: 4 }}
                       onClick={handleRunDynamicExtract}
                     >
-                      <Play size={16} /> Quét & Phân Tích Cấu Trúc
+                      <Play size={16} /> Quét & Phân Tích Cấu Trúc ({dynamicForm.items.length} API)
                     </button>
                   )}
                 </div>
 
                 {dynamicResults && (
-                  <div style={{ marginTop: 20, background: 'var(--bg-inset)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16 }}>
-                    <h3 style={{ fontSize: 14, fontWeight: 600, color: '#22c55e', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-                      ✅ Kết quả phát hiện các trường dữ liệu cần dịch:
-                    </h3>
-                    {Object.keys(dynamicResults.mappedTables).map(tbl => (
-                      <div key={tbl} style={{ marginBottom: 10 }}>
-                        <span className="badge badge-blue">Bảng: {tbl}</span>
-                        <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          {dynamicResults.mappedTables[tbl].map(f => (
-                            <span key={f} className="badge badge-green">{f}</span>
-                          ))}
+                  <div style={{ marginTop: 24, background: 'var(--bg-inset)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
+                      <h3 style={{ fontSize: 14, fontWeight: 600, color: '#22c55e', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        ✅ Kết quả phát hiện các trường dữ liệu cần dịch:
+                      </h3>
+                      {dynamicResults.mappedTables && Object.keys(dynamicResults.mappedTables).length > 0 && (
+                        <button className="btn btn-secondary btn-sm" onClick={handleWriteTranslationFile} disabled={loading}>
+                          📝 Ghi vào config/translation.php
+                        </button>
+                      )}
+                    </div>
+
+                    {Object.keys(dynamicResults.mappedTables || {}).length === 0 ? (
+                      <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>Không tìm thấy trường dữ liệu tiếng Việt nào mới.</p>
+                    ) : (
+                      Object.keys(dynamicResults.mappedTables).map(tbl => (
+                        <div key={tbl} style={{ marginBottom: 12 }}>
+                          <span className="badge badge-blue">Bảng: {tbl}</span>
+                          <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {dynamicResults.mappedTables[tbl].map(f => (
+                              <span key={f} className="badge badge-green">{f}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ))
+                    )}
+
+                    {dynamicResults.writeResult && (
+                      <div style={{ marginTop: 16, padding: 12, borderRadius: 'var(--radius)', background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)', fontSize: 13 }}>
+                        <div style={{ fontWeight: 600, color: '#22c55e', marginBottom: 4 }}>
+                          🎉 Đã cập nhật thành công file config/translation.php!
+                        </div>
+                        <div style={{ color: 'var(--text-main)', fontSize: 12 }}>
+                          📁 Đường dẫn: <code>{dynamicResults.writeResult.filePath}</code><br />
+                          ✨ Đã gộp {dynamicResults.writeResult.addedFieldsCount} trường mới vào {dynamicResults.writeResult.totalTables} bảng dữ liệu.
                         </div>
                       </div>
-                    ))}
+                    )}
                   </div>
                 )}
               </div>

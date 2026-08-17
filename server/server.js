@@ -6,7 +6,7 @@ const fs = require('fs');
 const { getConfig, saveConfig } = require('./services/configManager');
 const { collectFiles, extractFile, readExistingLang, slugify, formatReplacement, escapePhp } = require('./services/scanner');
 const { translateTexts } = require('./services/translator');
-const { httpGetJson, mapFieldsToTablesWithoutDb } = require('./services/apiScanner');
+const { httpGetJson, mapFieldsToTablesWithoutDb, writeTranslationPhp, resolveTranslationFilePath, loginAndGetAuthHeaders } = require('./services/apiScanner');
 
 const app = express();
 const PORT = 4000;
@@ -318,33 +318,137 @@ app.post('/api/extract/static', async (req, res) => {
   }
 });
 
-// Endpoint quét động API
+// Endpoint kiểm tra đăng nhập Admin API
+app.post('/api/auth/test-login', async (req, res) => {
+  try {
+    const authConfig = req.body;
+    if (!authConfig.authUrl || !authConfig.username) {
+      return res.status(400).json({ success: false, error: 'Thiếu URL Đăng nhập hoặc Tên tài khoản' });
+    }
+    broadcastLog(`🔐 Đang kiểm tra đăng nhập Admin API tại: ${authConfig.authUrl}...`);
+    const { headers, token } = await loginAndGetAuthHeaders({ ...authConfig, enabled: true });
+    broadcastLog(`🔑 Đăng nhập thành công! Token: ${token ? (token.slice(0, 15) + '...') : 'Đã nhận Cookie'}`);
+    res.json({
+      success: true,
+      token,
+      headers
+    });
+  } catch (err) {
+    broadcastLog(`❌ Đăng nhập thất bại: ${err.message}`, 'error');
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint quét động API (Hỗ trợ quét nhiều URL, Bảng & Xác thực Admin)
 app.post('/api/extract/dynamic', async (req, res) => {
   try {
-    const { apiUrl, tableName } = req.body;
-    if (!apiUrl || !tableName) {
-      return res.status(400).json({ success: false, error: 'Thiếu API URL hoặc Tên bảng DB' });
+    const config = { ...getConfig(), ...req.body };
+    const { items: rawItems, apiUrl, tableName, writeToFile, translationFilePath, auth } = req.body;
+
+    let items = Array.isArray(rawItems) ? rawItems : [];
+    if (items.length === 0 && apiUrl && tableName) {
+      items.push({ apiUrl, tableName });
     }
 
-    broadcastLog(`🌐 Đang gọi API: ${apiUrl}...`);
-    const json = await httpGetJson(apiUrl);
-    const targetData = json.data || json;
+    if (items.length === 0) {
+      return res.status(400).json({ success: false, error: 'Thiếu danh sách URL API và Tên bảng DB tương ứng' });
+    }
 
-    broadcastLog(`🔎 Đang phân tích các trường chứa tiếng Việt có dấu...`);
-    const mappedTables = mapFieldsToTablesWithoutDb(targetData, tableName);
+    const authConfig = auth || config.auth;
+    let authHeaders = {};
+    if (authConfig && authConfig.enabled) {
+      broadcastLog(`🔐 Đang đăng nhập Admin API tại [${authConfig.authUrl}]...`);
+      try {
+        const authRes = await loginAndGetAuthHeaders(authConfig);
+        authHeaders = authRes.headers;
+        broadcastLog(`🔑 Đăng nhập Admin thành công! Đã lấy Header xác thực: ${Object.keys(authHeaders).join(', ')}`);
+      } catch (authErr) {
+        broadcastLog(`❌ Lỗi đăng nhập Admin: ${authErr.message}. Tiếp tục quét không xác thực...`, 'error');
+      }
+    }
 
-    broadcastLog(`✅ Đã tìm thấy các trường dữ liệu cần dịch:`);
-    for (const tbl of Object.keys(mappedTables)) {
-      broadcastLog(`   - Bảng [${tbl}]: ${mappedTables[tbl].join(', ')}`);
+    broadcastLog(`🚀 Bắt đầu quét động API (${items.length} URL)...`);
+
+    const combinedMappedTables = {};
+    const rawSamples = {};
+    const errors = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const curUrl = item.apiUrl ? item.apiUrl.trim() : '';
+      const curTable = item.tableName ? item.tableName.trim() : '';
+      if (!curUrl || !curTable) continue;
+
+      broadcastLog(`🌐 [${i + 1}/${items.length}] Đang gọi API: ${curUrl}...`);
+      try {
+        const json = await httpGetJson(curUrl, authHeaders);
+        const targetData = (json && json.data) ? json.data : json;
+        rawSamples[curTable] = targetData;
+
+        broadcastLog(`🔎 Phân tích trường tiếng Việt cho bảng [${curTable}]...`);
+        const mapped = mapFieldsToTablesWithoutDb(targetData, curTable);
+
+        for (const tbl of Object.keys(mapped)) {
+          if (!combinedMappedTables[tbl]) combinedMappedTables[tbl] = [];
+          for (const f of mapped[tbl]) {
+            if (!combinedMappedTables[tbl].includes(f)) {
+              combinedMappedTables[tbl].push(f);
+            }
+          }
+          broadcastLog(`   -> Bảng [${tbl}]: ${mapped[tbl].join(', ')}`);
+        }
+      } catch (err) {
+        broadcastLog(`❌ Lỗi khi quét API (${curUrl}): ${err.message}`, 'error');
+        errors.push({ apiUrl: curUrl, tableName: curTable, error: err.message });
+      }
+    }
+
+    broadcastLog(`✅ Tổng hợp các bảng và trường dữ liệu phát hiện:`);
+    for (const tbl of Object.keys(combinedMappedTables)) {
+      broadcastLog(`   - Bảng [${tbl}]: ${combinedMappedTables[tbl].join(', ')}`);
+    }
+
+    let writeResult = null;
+    if (writeToFile) {
+      const targetPath = translationFilePath || resolveTranslationFilePath(config);
+      broadcastLog(`📝 Đang tự động ghi/gộp kết quả vào file config: ${targetPath}...`);
+      writeResult = writeTranslationPhp(targetPath, combinedMappedTables);
+      broadcastLog(`🎉 Đã ghi thành công vào ${targetPath} (${writeResult.addedFieldsCount} trường mới trong ${writeResult.addedTablesCount} bảng mới).`);
     }
 
     res.json({
       success: true,
-      mappedTables,
-      rawSample: targetData
+      mappedTables: combinedMappedTables,
+      rawSamples,
+      writeResult,
+      errors
     });
   } catch (err) {
     broadcastLog(`❌ Lỗi khi quét API: ${err.message}`, 'error');
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint ghi trực tiếp mappedTables vào config/translation.php
+app.post('/api/extract/dynamic/write', (req, res) => {
+  try {
+    const config = getConfig();
+    const { mappedTables, translationFilePath } = req.body;
+    if (!mappedTables || Object.keys(mappedTables).length === 0) {
+      return res.status(400).json({ success: false, error: 'Không có danh sách bảng dữ liệu để ghi' });
+    }
+
+    const targetPath = translationFilePath || resolveTranslationFilePath(config);
+    broadcastLog(`📝 Đang thực hiện ghi kết quả vào file config: ${targetPath}...`);
+    const writeResult = writeTranslationPhp(targetPath, mappedTables);
+    broadcastLog(`🎉 Đã ghi thành công vào ${targetPath} (${writeResult.addedFieldsCount} trường mới được gộp vào ${writeResult.totalTables} bảng).`);
+
+    res.json({
+      success: true,
+      writeResult
+    });
+  } catch (err) {
+    broadcastLog(`❌ Lỗi khi ghi file translation.php: ${err.message}`, 'error');
     res.status(500).json({ success: false, error: err.message });
   }
 });

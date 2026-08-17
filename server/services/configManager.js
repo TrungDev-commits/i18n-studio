@@ -32,7 +32,23 @@ const DEFAULT_CONFIG = {
   ],
   prefix: 'text_',
   langFileName: 'messages.php',
-  defaultApiBaseUrl: 'https://bandoso-daklak.rynansaas.com'
+  defaultApiBaseUrl: 'https://bandoso-daklak.rynansaas.com',
+  translationFilePath: 'D:\\H_SourceCode\\SAAS\\bandoso_daklak\\config\\translation.php',
+  auth: {
+    enabled: false,
+    authUrl: 'https://bandoso-daklak.rynansaas.com/api/v1/auth/login',
+    username: '',
+    password: '',
+    tokenHeader: 'Authorization',
+    tokenPrefix: 'Bearer '
+  },
+  apiItems: [
+    {
+      id: '1',
+      apiUrl: 'https://bandoso-daklak.rynansaas.com/api/v1/public/cay-trong',
+      tableName: 'nongnghiep_caytrong'
+    }
+  ]
 };
 
 function getConfig() {
