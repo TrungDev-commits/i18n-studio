@@ -1,0 +1,41 @@
+{
+  "projectRoot": "D:\\H_SourceCode\\SAAS\\bandoso_daklak\\src\\modules\\mobile\\src\\views\\su-kien-le-hoi\\le-hoi-sau-rieng\\index.vue",
+  "locales": [
+    {
+      "code": "vi",
+      "name": "Tiếng Việt",
+      "isSource": true
+    },
+    {
+      "code": "en",
+      "name": "English (EN)",
+      "isSource": false
+    },
+    {
+      "code": "zh",
+      "name": "Chinese (ZH)",
+      "isSource": false
+    }
+  ],
+  "scanPaths": [
+    "src/modules",
+    "src/views",
+    "src/components",
+    "resources/views"
+  ],
+  "skipDirs": [
+    "node_modules",
+    "vendor",
+    "public",
+    "storage",
+    ".git",
+    ".svn",
+    ".idea",
+    "dist",
+    "build",
+    "cache"
+  ],
+  "prefix": "text_",
+  "langFileName": "messages.php",
+  "defaultApiBaseUrl": "https://bandoso-daklak.rynansaas.com"
+}

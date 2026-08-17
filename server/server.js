@@ -261,8 +261,33 @@ if (fs.existsSync(clientDist)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`\n======================================================`);
-  console.log(`🌐 i18n Studio Server đang chạy tại http://localhost:${PORT}`);
-  console.log(`======================================================\n`);
-});
+function startServer({ port = PORT, host = '127.0.0.1', maxAttempts = 20 } = {}) {
+  return new Promise((resolve, reject) => {
+    const tryListen = (p, attempt) => {
+      const server = app.listen(p, host, () => {
+        const actual = server.address().port;
+        console.log(`\n======================================================`);
+        console.log(`🌐 i18n Studio Server đang chạy tại http://localhost:${actual}`);
+        console.log(`======================================================\n`);
+        resolve(server);
+      });
+      server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE' && attempt < maxAttempts) {
+          tryListen(p + 1, attempt + 1);
+        } else {
+          reject(err);
+        }
+      });
+    };
+    tryListen(port, 0);
+  });
+}
+
+if (require.main === module) {
+  startServer().catch((err) => {
+    console.error('❌ Không thể khởi động server:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { app, startServer, PORT };

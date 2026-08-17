@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+
+# Electron
+desktop/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db

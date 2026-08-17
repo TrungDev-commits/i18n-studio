@@ -245,6 +245,7 @@ function extractFile(file, occurrences, reviews) {
 function collectFiles(projectRoot, scanPaths, skipDirs) {
   const skipSet = new Set(skipDirs);
   const files = [];
+  const seen = new Set();
 
   const walk = (dir) => {
     if (!fs.existsSync(dir)) return;
@@ -255,20 +256,41 @@ function collectFiles(projectRoot, scanPaths, skipDirs) {
         walk(full);
       } else if (entry.isFile()) {
         const ext = path.extname(full).toLowerCase();
-        if (ext === '.vue' || ext === '.js') {
+        if ((ext === '.vue' || ext === '.js') && !seen.has(full)) {
+          seen.add(full);
           files.push(full);
         }
       }
     }
   };
 
+  const collectPath = (p) => {
+    if (!fs.existsSync(p)) return;
+    const stat = fs.statSync(p);
+    if (stat.isDirectory()) {
+      walk(p);
+    } else if (stat.isFile()) {
+      const ext = path.extname(p).toLowerCase();
+      if ((ext === '.vue' || ext === '.js') && !seen.has(p)) {
+        seen.add(p);
+        files.push(p);
+      }
+    }
+  };
+
   for (const p of scanPaths) {
     const absPath = path.isAbsolute(p) ? p : path.join(projectRoot, p);
-    if (fs.existsSync(absPath)) {
-      const stat = fs.statSync(absPath);
-      if (stat.isDirectory()) walk(absPath);
-      else if (stat.isFile()) files.push(absPath);
-    }
+    collectPath(absPath);
+  }
+
+  // Nếu projectRoot tự thân là một file .vue/.js thì quét trực tiếp file đó
+  if (fs.existsSync(projectRoot) && fs.statSync(projectRoot).isFile()) {
+    collectPath(projectRoot);
+  }
+
+  // Nếu các scanPaths không trỏ tới đâu cả, quét luôn thư mục projectRoot
+  if (files.length === 0 && fs.existsSync(projectRoot) && fs.statSync(projectRoot).isDirectory()) {
+    walk(projectRoot);
   }
 
   return files;

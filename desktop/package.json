@@ -1,0 +1,16 @@
+{
+  "name": "i18n-studio-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron . --dev",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "i18n-studio-server": "*"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0"
+  }
+}

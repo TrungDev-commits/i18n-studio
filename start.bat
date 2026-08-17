@@ -1,23 +1,14 @@
 @echo off
 echo ===================================================
-echo   Starting i18n Translation Studio Dashboard...
+echo   Starting i18n Translation Studio (Desktop)...
 echo ===================================================
 cd /d %~dp0
 
-if not exist server\node_modules (
-    echo [1/3] Installing server dependencies...
-    cd server && call npm install && cd ..
+if not exist node_modules (
+    echo [1/2] Installing dependencies (server & client)...
+    call npm install
 )
 
-if not exist client\node_modules (
-    echo [2/3] Installing client dependencies...
-    cd client && call npm install && cd ..
-)
-
-echo [3/3] Launching Server & Client...
-start cmd /k "cd server && node server.js"
-start cmd /k "cd client && npm run dev"
-
-timeout /t 3 >nul
-start http://localhost:3000
+echo [2/2] Launching Desktop App (build + Electron)...
+start "i18n-studio" cmd /k "npm run desktop"
 echo Started! You can close this window now.
