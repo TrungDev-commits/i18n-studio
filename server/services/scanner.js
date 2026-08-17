@@ -6,6 +6,151 @@ const babel = require('@babel/parser');
 const VN_RX = /[àảãáạăằẳẵắặâầẩẫấậđèẻẽéẹêềểễếệìỉĩíịòỏõóọôồổỗốộơờởỡớợùủũúụưừửữứựỳỷỹýỵÀẢÃÁẠĂẰẲẴẮẶÂẦẨẪẤẬĐÈẺẼÉẸÊỀỂỄẾỆÌỈĨÍỊÒỎÕÓỌÔỒỔỖỐỘƠỜỞỠỚỢÙỦŨÚỤƯỪỬỮỨỰỲỶỸÝỴ]/;
 const RUN_RX = /[A-Za-z0-9_À-ỹ][A-Za-z0-9_À-ỹ\s.,:;()&\-'/%\u2013\u2014\u2026\u2022]*/g;
 
+function isTranslationCall(node) {
+  if (!node || typeof node !== 'object' || node.type !== 'CallExpression') return false;
+  const callee = node.callee;
+  if (!callee) return false;
+
+  let funcName = '';
+  if (callee.type === 'Identifier') {
+    funcName = callee.name;
+  } else if (callee.type === 'MemberExpression') {
+    if (callee.property && callee.property.type === 'Identifier') {
+      funcName = callee.property.name;
+    }
+  }
+
+  const translationNames = new Set(['$t', 't', '$tc', '$te', 'trans', '__', 'i18n']);
+  if (translationNames.has(funcName)) return true;
+
+  if (callee.type === 'MemberExpression' && callee.object) {
+    let objName = '';
+    if (callee.object.type === 'Identifier') {
+      objName = callee.object.name;
+    } else if (callee.object.type === 'MemberExpression' && callee.object.property) {
+      objName = callee.object.property.name;
+    }
+    if (['i18n', '$i18n', 'VueI18n'].includes(objName)) return true;
+  }
+
+  return false;
+}
+
+function hasTranslationCall(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (isTranslationCall(node)) return true;
+
+  for (const key of Object.keys(node)) {
+    if (['start', 'end', 'loc', 'range', 'leadingComments', 'trailingComments'].includes(key)) continue;
+    const v = node[key];
+    if (Array.isArray(v)) {
+      for (const el of v) {
+        if (hasTranslationCall(el)) return true;
+      }
+    } else if (v && typeof v === 'object') {
+      if (hasTranslationCall(v)) return true;
+    }
+  }
+  return false;
+}
+
+function isNodeInside(target, parentNode) {
+  if (!parentNode || typeof parentNode !== 'object') return false;
+  if (target === parentNode) return true;
+  if (typeof target.start === 'number' && typeof parentNode.start === 'number') {
+    return target.start >= parentNode.start && target.end <= parentNode.end;
+  }
+  return false;
+}
+
+function isFallbackForTranslation(node, parent, ancestors = []) {
+  const chain = [parent, ...ancestors].filter(Boolean);
+
+  for (let i = 0; i < chain.length; i++) {
+    const current = chain[i];
+
+    // 1. LogicalExpression: A || B or A ?? B or A && B
+    if (current.type === 'LogicalExpression' && ['||', '??', '&&'].includes(current.operator)) {
+      if (hasTranslationCall(current.left) && isNodeInside(node, current.right)) {
+        return true;
+      }
+      if (hasTranslationCall(current.right) && isNodeInside(node, current.left)) {
+        return true;
+      }
+    }
+
+    // 2. ConditionalExpression: test ? consequent : alternate
+    if (current.type === 'ConditionalExpression') {
+      if (hasTranslationCall(current.test) || hasTranslationCall(current.consequent) || hasTranslationCall(current.alternate)) {
+        if (hasTranslationCall(current.test) && (isNodeInside(node, current.consequent) || isNodeInside(node, current.alternate))) {
+          return true;
+        }
+        if (hasTranslationCall(current.consequent) && isNodeInside(node, current.alternate)) {
+          return true;
+        }
+      }
+    }
+
+    // 3. CallExpression: $t('key', 'default string') or $t('key', { default: 'default string' })
+    if (isTranslationCall(current)) {
+      const firstArg = current.arguments && current.arguments[0];
+      if (firstArg && !isNodeInside(node, firstArg)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function isRunInsideTemplateFallback(text, relStart, runLength) {
+  const mustacheRegex = /\{\{([\s\S]*?)\}\}/g;
+  let match;
+  while ((match = mustacheRegex.exec(text)) !== null) {
+    const exprStart = match.index + 2;
+    const exprEnd = match.index + match[0].length - 2;
+    const runEnd = relStart + runLength;
+
+    if (relStart >= exprStart && runEnd <= exprEnd) {
+      const exprStr = match[1];
+      try {
+        const ast = babel.parseExpression(exprStr, { allowReturnOutsideFunction: true });
+        let isFallback = false;
+        const walkExpr = (node, parent, ancestors = []) => {
+          if (!node || typeof node !== 'object' || isFallback) return;
+          if (Array.isArray(node)) {
+            node.forEach(n => walkExpr(n, parent, ancestors));
+            return;
+          }
+          if (node.type === 'StringLiteral') {
+            const litStartInText = exprStart + node.start;
+            const litEndInText = exprStart + node.end;
+            if (relStart >= litStartInText && runEnd <= litEndInText) {
+              if (isFallbackForTranslation(node, parent, ancestors)) {
+                isFallback = true;
+                return;
+              }
+            }
+          }
+          const nextAncestors = [node, ...ancestors];
+          for (const key of Object.keys(node)) {
+            if (['start', 'end', 'loc', 'range', 'leadingComments', 'trailingComments'].includes(key)) continue;
+            const v = node[key];
+            if (v && typeof v === 'object') walkExpr(v, node, nextAncestors);
+          }
+        };
+        walkExpr(ast, null, []);
+        if (isFallback) return true;
+      } catch (e) {
+        if (/(\$t|i18n|trans)\b/.test(exprStr) && (/\|\||\?\?|\?/.test(exprStr))) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 const TRANSLATABLE_ATTRS = new Set([
   'title', 'placeholder', 'alt', 'label', 'aria-label', 'arial-label',
   'data-title', 'data-label', 'data-tooltip', 'tooltip', 'hint'
@@ -94,6 +239,13 @@ function extractTemplate(tpl, parseSrc, file, occurrences, reviews) {
     let attrName;
     if (isBound) {
       if (/^v-(html|text)$/.test(name)) return;
+      try {
+        const exprAst = babel.parseExpression(value.trim());
+        if (hasTranslationCall(exprAst)) {
+          return;
+        }
+      } catch (e) {}
+
       const m = /^(['"])(.*)\1$/s.exec(value.trim());
       if (!m) {
         reviews.push({ file, msg: `Biểu thức thuộc tính ${name} phức tạp: ${JSON.stringify(value)}` });
@@ -134,6 +286,7 @@ function extractTemplate(tpl, parseSrc, file, occurrences, reviews) {
       if (!match) return;
       const textStart = match.start;
       findRuns(text, (run, relStart) => {
+        if (isRunInsideTemplateFallback(text, relStart, run.length)) return;
         const abs = contentStart + textStart + relStart;
         const absEnd = abs + run.length;
         if (parseSrc.slice(abs, absEnd) !== run) return;
@@ -199,27 +352,28 @@ function extractScript(block, parseSrc, file, occurrences, reviews) {
     });
   };
 
-  const walk = (node, parent) => {
+  const walk = (node, parent, ancestors = []) => {
     if (!node || typeof node !== 'object') return;
     if (Array.isArray(node)) {
-      node.forEach((n) => walk(n, parent));
+      node.forEach((n) => walk(n, parent, ancestors));
       return;
     }
     if (node.type === 'StringLiteral') {
+      if (isFallbackForTranslation(node, parent, ancestors)) return;
       handleLiteral(node, parent);
       return;
     }
     const wasFn = isFunctionLike(node);
     if (wasFn) state.inFunction++;
-    const nextParent = node;
+    const nextAncestors = [node, ...ancestors];
     for (const key of Object.keys(node)) {
       if (['start', 'end', 'loc', 'range', 'leadingComments', 'trailingComments'].includes(key)) continue;
       const v = node[key];
-      if (v && typeof v === 'object') walk(v, nextParent);
+      if (v && typeof v === 'object') walk(v, node, nextAncestors);
     }
     if (wasFn) state.inFunction--;
   };
-  walk(ast, null);
+  walk(ast, null, []);
 }
 
 function extractFile(file, occurrences, reviews) {
