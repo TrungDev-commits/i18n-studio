@@ -80,52 +80,113 @@ app.post('/api/extract/static', async (req, res) => {
       return { ...loc, path: p, lang: readExistingLang(p) };
     });
 
-    // Gom tất cả key đã khai báo ở mọi file ngôn ngữ để tránh trùng
-    const allKeys = new Set();
-    localeFiles.forEach(lf => lf.lang.keys.forEach(k => allKeys.add(k)));
+    // Ưu tiên file ngôn ngữ nguồn trước khi tra cứu
+    const sortedLocaleFiles = [...localeFiles].sort((a, b) => (a.code === sourceLocale.code ? -1 : b.code === sourceLocale.code ? 1 : 0));
+
+    // Gom các key đã định nghĩa sẵn trong các file ngôn ngữ trước khi quét
+    const existingLanguageKeys = new Set();
+    sortedLocaleFiles.forEach(lf => lf.lang.keys.forEach(k => existingLanguageKeys.add(k)));
+
+    const allKeys = new Set(existingLanguageKeys);
 
     const uniqueStrings = [];
     const viSet = new Set();
     const keyByVi = {};
+    const isReusedByVi = {};
     let reusedCount = 0;
 
     for (const occ of occurrences) {
       const vi = occ.vi;
-      if (viSet.has(vi)) continue;
-      viSet.add(vi);
-      uniqueStrings.push(vi);
+      const normVi = vi.replace(/\s+/g, ' ').trim();
 
-      // Nếu chuỗi đã được khai báo trong bất kỳ file ngôn ngữ nào → tái sử dụng key cũ
+      if (keyByVi[vi] || keyByVi[normVi]) {
+        if (!keyByVi[vi]) keyByVi[vi] = keyByVi[normVi];
+        continue;
+      }
+
+      if (!viSet.has(normVi)) {
+        viSet.add(normVi);
+        uniqueStrings.push(vi);
+      }
+
+      // 1. Kiểm tra nếu chuỗi đã được định nghĩa trong bất kỳ file ngôn ngữ nào → tái sử dụng key đã định nghĩa
       let existingKey = null;
-      for (const lf of localeFiles) {
-        if (lf.lang.valueKeyMap && lf.lang.valueKeyMap[vi]) {
-          existingKey = lf.lang.valueKeyMap[vi];
-          break;
+      for (const lf of sortedLocaleFiles) {
+        if (lf.lang.valueKeyMap) {
+          if (lf.lang.valueKeyMap[vi]) {
+            existingKey = lf.lang.valueKeyMap[vi];
+            break;
+          }
+          if (lf.lang.valueKeyMap[vi.trim()]) {
+            existingKey = lf.lang.valueKeyMap[vi.trim()];
+            break;
+          }
+          if (lf.lang.valueKeyMap[normVi]) {
+            existingKey = lf.lang.valueKeyMap[normVi];
+            break;
+          }
         }
       }
+
       if (existingKey) {
         keyByVi[vi] = existingKey;
+        keyByVi[normVi] = existingKey;
+        isReusedByVi[vi] = true;
+        isReusedByVi[normVi] = true;
         reusedCount++;
         continue;
       }
 
-      // Chưa khai báo → sinh key mới
+      // 2. Kiểm tra nếu KEY sinh ra từ chuỗi (candidateKey hoặc rawBaseKey) đã có định nghĩa trong file ngôn ngữ → tái sử dụng key đã định nghĩa
       let base = slugify(vi);
       if (!base) base = 'chuoi';
-      let key = (prefix || 'text_') + base;
+      let candidateKey = (prefix || 'text_') + base;
+      let rawBaseKey = base;
+
+      let existingKeyByName = null;
+      const variants = [
+        candidateKey,
+        rawBaseKey,
+        'messages.' + candidateKey,
+        'messages.' + rawBaseKey
+      ];
+
+      for (const v of variants) {
+        if (existingLanguageKeys.has(v)) {
+          existingKeyByName = v;
+          break;
+        }
+      }
+
+      if (existingKeyByName) {
+        keyByVi[vi] = existingKeyByName;
+        keyByVi[normVi] = existingKeyByName;
+        isReusedByVi[vi] = true;
+        isReusedByVi[normVi] = true;
+        reusedCount++;
+        continue;
+      }
+
+      // 3. Chưa có key hay chuỗi này trong định nghĩa → tạo key mới (tránh trùng với các key mới được tạo trong cùng phiên quét)
+      let key = candidateKey;
       let n = 2;
-      while (allKeys.has(key)) {
+      while (allKeys.has(key) || allKeys.has('messages.' + key)) {
         key = `${prefix || 'text_'}${base}_${n}`;
         n++;
       }
       allKeys.add(key);
+      allKeys.add('messages.' + key);
       keyByVi[vi] = key;
+      keyByVi[normVi] = key;
+      isReusedByVi[vi] = false;
+      isReusedByVi[normVi] = false;
     }
 
-    broadcastLog(`✨ Tổng số chuỗi: ${uniqueStrings.length} (${reusedCount} đã có key, ${uniqueStrings.length - reusedCount} key mới).`);
+    broadcastLog(`✨ Tổng số chuỗi: ${uniqueStrings.length} (${reusedCount} đã có key - không khai báo lại, ${uniqueStrings.length - reusedCount} key mới).`);
 
     for (const occ of occurrences) {
-      occ.key = keyByVi[occ.vi];
+      const normVi = occ.vi.replace(/\s+/g, ' ').trim();
+      occ.key = keyByVi[occ.vi] || keyByVi[normVi];
     }
 
     // Dịch các ngôn ngữ đích (chỉ dịch chuỗi nào còn thiếu trong file của ngôn ngữ đó)
@@ -140,9 +201,11 @@ app.post('/api/extract/static', async (req, res) => {
         const existingValues = {};
         const needTranslate = [];
         for (const vi of uniqueStrings) {
-          const key = keyByVi[vi];
-          if (lf.lang.keyValueMap && lf.lang.keyValueMap[key]) {
-            existingValues[vi] = lf.lang.keyValueMap[key];
+          const normVi = vi.replace(/\s+/g, ' ').trim();
+          const key = keyByVi[vi] || keyByVi[normVi];
+          const rawKey = key.replace(/^messages\./, '');
+          if (lf.lang.keyValueMap && (lf.lang.keyValueMap[key] || lf.lang.keyValueMap[rawKey])) {
+            existingValues[vi] = lf.lang.keyValueMap[key] || lf.lang.keyValueMap[rawKey];
           } else {
             needTranslate.push(vi);
           }
@@ -158,7 +221,10 @@ app.post('/api/extract/static', async (req, res) => {
 
     // Tổ chức danh sách kết quả
     const newEntries = uniqueStrings.map(vi => {
-      const row = { key: keyByVi[vi], vi };
+      const normVi = vi.replace(/\s+/g, ' ').trim();
+      const key = keyByVi[vi] || keyByVi[normVi];
+      const isReused = isReusedByVi[vi] || isReusedByVi[normVi] || false;
+      const row = { key, vi, isReused };
       for (const loc of targetLocales) {
         row[loc.code] = translations[loc.code] ? (translations[loc.code][vi] || vi) : vi;
       }
@@ -168,13 +234,21 @@ app.post('/api/extract/static', async (req, res) => {
     // Nếu không phải dryRun và bật autoRefactor
     if (!dryRun && autoRefactor) {
       broadcastLog(`🛠️ Đang cập nhật và refactor trực tiếp vào mã nguồn dự án...`);
-      // Cập nhật các file messages.php: chỉ ghi thêm khóa còn thiếu trong từng file
+      // Cập nhật các file messages.php: chỉ ghi thêm khóa còn thiếu trong từng file (không ghi đè/khai báo lại key đã trùng)
       for (const lf of localeFiles) {
         const p = lf.path;
-        const missing = newEntries.filter(e => !lf.lang.keys.has(e.key));
+        const missing = newEntries.filter(e => {
+          if (e.isReused) return false;
+          const k = e.key;
+          const rawK = k.replace(/^messages\./, '');
+          return !lf.lang.keys.has(k) && !lf.lang.keys.has(rawK) && !lf.lang.keys.has('messages.' + rawK);
+        });
+
         if (missing.length === 0) continue;
 
         if (!fs.existsSync(p)) {
+          const dir = path.dirname(p);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
           fs.writeFileSync(p, `<?php\n\nreturn [\n];\n`, 'utf8');
         }
         const src = fs.readFileSync(p, 'utf8');
@@ -182,11 +256,14 @@ app.post('/api/extract/static', async (req, res) => {
         const idx = src.lastIndexOf(marker);
         if (idx >= 0) {
           const block = missing
-            .map(e => `    '${escapePhp(e.key)}' => '${escapePhp(e[lf.code] || e.vi)}',`)
+            .map(e => {
+              const cleanKey = e.key.replace(/^messages\./, '');
+              return `    '${escapePhp(cleanKey)}' => '${escapePhp(e[lf.code] || e.vi)}',`;
+            })
             .join('\n');
           const out = src.slice(0, idx) + block + '\n' + src.slice(idx);
           fs.writeFileSync(p, out, 'utf8');
-          broadcastLog(`   -> Đã ghi thêm ${missing.length} khóa vào: ${p}`);
+          broadcastLog(`   -> Đã ghi thêm ${missing.length} khóa mới vào: ${p}`);
         }
       }
 
@@ -229,8 +306,9 @@ app.post('/api/extract/static', async (req, res) => {
         reusedKeysCount: reusedCount,
         reviewsCount: reviews.length
       },
+      files,
       newEntries,
-      occurrences: occurrences.slice(0, 100), // Preview 100 item
+      occurrences, // Return all occurrences for full details
       reviews
     });
 
@@ -276,8 +354,11 @@ app.post('/api/export/download-file', (req, res) => {
   const { langCode, entries } = req.body;
   let phpContent = `<?php\n\nreturn [\n`;
   for (const item of (entries || [])) {
+    // Không khai báo lại key nếu key đã trùng/định nghĩa từ trước
+    if (item.isReused) continue;
+    const cleanKey = item.key.replace(/^messages\./, '');
     const val = item[langCode] || item.vi || '';
-    phpContent += `    '${escapePhp(item.key)}' => '${escapePhp(val)}',\n`;
+    phpContent += `    '${escapePhp(cleanKey)}' => '${escapePhp(val)}',\n`;
   }
   phpContent += `];\n`;
 

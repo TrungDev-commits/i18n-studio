@@ -296,35 +296,105 @@ function collectFiles(projectRoot, scanPaths, skipDirs) {
   return files;
 }
 
-function readExistingLang(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return { keys: new Set(), keyValueMap: {}, valueKeyMap: {} };
+function unescapePhpString(str, quote) {
+  if (quote === "'") {
+    return str.replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+  } else {
+    return str
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\r')
+      .replace(/\\t/g, '\t')
+      .replace(/\\\\/g, '\\');
   }
-  const src = fs.readFileSync(filePath, 'utf8');
+}
+
+function readExistingLang(filePath) {
   const keys = new Set();
   const keyValueMap = {};
   const valueKeyMap = {};
-  const re = /^\s*'([^']+)'\s*=>\s*(['"])((?:[^\\]|\\.)*?)\2,/gm;
+
+  if (!fs.existsSync(filePath)) {
+    return { keys, keyValueMap, valueKeyMap };
+  }
+
+  const src = fs.readFileSync(filePath, 'utf8');
+  // Loại bỏ comment dòng duy nhất và comment nhiều dòng
+  const cleanSrc = src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*/g, '')
+    .replace(/#.*/g, '');
+
+  const tokenRegex = /(['"])((?:[^\\]|\\.)*?)\1|=>|\[|\]|\barray\(|\)/g;
+  const tokens = [];
   let m;
-  while ((m = re.exec(src))) {
-    const key = m[1];
-    let val = m[3];
-    if (m[2] === "'") {
-      val = val.replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+  while ((m = tokenRegex.exec(cleanSrc))) {
+    if (m[1] !== undefined) {
+      tokens.push({ type: 'string', value: unescapePhpString(m[2], m[1]) });
     } else {
-      val = val.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-    }
-    keys.add(key);
-    keyValueMap[key] = val;
-    if (!valueKeyMap[val]) {
-      valueKeyMap[val] = key;
+      const raw = m[0];
+      if (raw === '=>') tokens.push({ type: 'arrow' });
+      else if (raw === '[' || raw.startsWith('array')) tokens.push({ type: 'array_start' });
+      else if (raw === ']' || raw === ')') tokens.push({ type: 'array_end' });
     }
   }
+
+  const arrayStack = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token.type === 'array_start') {
+      i++;
+      continue;
+    }
+
+    if (token.type === 'array_end') {
+      if (arrayStack.length > 0) {
+        arrayStack.pop();
+      }
+      i++;
+      continue;
+    }
+
+    if (token.type === 'string' && i + 1 < tokens.length && tokens[i + 1].type === 'arrow') {
+      const keyName = token.value;
+      const nextToken = tokens[i + 2];
+      if (nextToken) {
+        if (nextToken.type === 'array_start') {
+          arrayStack.push(keyName);
+          i += 3;
+          continue;
+        } else if (nextToken.type === 'string') {
+          const fullKey = arrayStack.length > 0 ? `${arrayStack.join('.')}.${keyName}` : keyName;
+          const val = nextToken.value;
+
+          keys.add(fullKey);
+          keys.add(`messages.${fullKey}`);
+          if (fullKey.startsWith('messages.')) {
+            keys.add(fullKey.replace(/^messages\./, ''));
+          }
+
+          keyValueMap[fullKey] = val;
+
+          if (!valueKeyMap[val]) valueKeyMap[val] = fullKey;
+          const trimmedVal = val.trim();
+          if (!valueKeyMap[trimmedVal]) valueKeyMap[trimmedVal] = fullKey;
+          const normVal = val.replace(/\s+/g, ' ').trim();
+          if (!valueKeyMap[normVal]) valueKeyMap[normVal] = fullKey;
+
+          i += 3;
+          continue;
+        }
+      }
+    }
+    i++;
+  }
+
   return { keys, keyValueMap, valueKeyMap };
 }
 
 function formatReplacement(occ, key) {
-  const full = `messages.${key}`;
+  const full = key.startsWith('messages.') ? key : `messages.${key}`;
   switch (occ.kind) {
     case 'template-text':
       return `{{ $t('${full}') }}`;

@@ -18,6 +18,9 @@ import {
   Activity,
   SlidersHorizontal,
   AlertTriangle,
+  Search,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 const VIEWS = {
@@ -48,6 +51,46 @@ export default function App() {
   const [terminalOpen, setTerminalOpen] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [serverOnline, setServerOnline] = useState(false);
+  const [activeModal, setActiveModal] = useState(null);
+  const [modalSearch, setModalSearch] = useState('');
+  const [copiedText, setCopiedText] = useState(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setActiveModal(null);
+      }
+    };
+    if (activeModal) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [activeModal]);
+
+  const getRelativePath = (absolutePath) => {
+    if (!absolutePath || !config?.projectRoot) return absolutePath;
+    let relative = absolutePath;
+    const root = config.projectRoot.replace(/\\/g, '/');
+    const path = absolutePath.replace(/\\/g, '/');
+    if (path.startsWith(root)) {
+      relative = path.substring(root.length);
+    }
+    if (relative.startsWith('/')) {
+      relative = relative.substring(1);
+    }
+    return relative;
+  };
+
+  const handleCopy = (text) => {
+    navigator.clipboard.writeText(text);
+    setCopiedText(text);
+    setTimeout(() => {
+      setCopiedText(null);
+    }, 2000);
+  };
+
   const [dynamicForm, setDynamicForm] = useState({
     apiUrl: 'https://bandoso-daklak.rynansaas.com/api-ui/quan-ly-gioi-thieu-xa-phuong/get-active-communes',
     tableName: 'gioi_thieu_xa_phuong'
@@ -229,6 +272,307 @@ export default function App() {
     );
   }
 
+  const renderModal = () => {
+    if (!activeModal || !results) return null;
+
+    let title = '';
+    let modalIcon = null;
+    let content = null;
+
+    const targetLocales = config.locales.filter(l => !l.isSource);
+
+    if (activeModal === 'files') {
+      title = 'Danh sách Files phân tích';
+      modalIcon = <Files size={18} color="#38bdf8" />;
+      
+      const fileList = results.files || [];
+      const filteredFiles = fileList.filter(f => 
+        getRelativePath(f).toLowerCase().includes(modalSearch.toLowerCase())
+      );
+
+      content = (
+        <div>
+          <div className="modal-search-wrapper" style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <input
+                type="text"
+                className="input-text"
+                placeholder="Tìm kiếm file..."
+                value={modalSearch}
+                onChange={e => setModalSearch(e.target.value)}
+                style={{ paddingLeft: 36 }}
+              />
+              <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-faint)' }} />
+            </div>
+          </div>
+
+          <div style={{ maxHeight: '50vh', overflowY: 'auto' }}>
+            {filteredFiles.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-faint)' }}>Không tìm thấy file nào.</div>
+            ) : (
+              filteredFiles.map((file, idx) => {
+                const relPath = getRelativePath(file);
+                return (
+                  <div key={idx} className="modal-list-item">
+                    <span className="modal-item-path">{relPath}</span>
+                    <div className="modal-item-action">
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleCopy(file)}
+                        style={{ padding: 4 }}
+                        title="Copy đường dẫn tuyệt đối"
+                      >
+                        {copiedText === file ? <Check size={13} color="#22c55e" /> : <Copy size={13} />}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      );
+    } else if (activeModal === 'occurrences') {
+      title = 'Chi tiết Vị trí phát hiện';
+      modalIcon = <Activity size={18} color="#f59e0b" />;
+
+      const occList = results.occurrences || [];
+      const filteredOccs = occList.filter(occ => 
+        (occ.vi || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
+        (occ.key || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
+        getRelativePath(occ.file).toLowerCase().includes(modalSearch.toLowerCase()) ||
+        (occ.kind || '').toLowerCase().includes(modalSearch.toLowerCase())
+      );
+
+      content = (
+        <div>
+          <div className="modal-search-wrapper" style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <input
+                type="text"
+                className="input-text"
+                placeholder="Tìm kiếm theo file, từ khóa, chuỗi gốc..."
+                value={modalSearch}
+                onChange={e => setModalSearch(e.target.value)}
+                style={{ paddingLeft: 36 }}
+              />
+              <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-faint)' }} />
+            </div>
+          </div>
+
+          <div className="table-wrap" style={{ maxHeight: '50vh' }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: '35%' }}>File / Vị trí</th>
+                  <th style={{ width: '15%' }}>Loại</th>
+                  <th style={{ width: '25%' }}>Chuỗi gốc (VI)</th>
+                  <th style={{ width: '25%' }}>Khóa gán</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredOccs.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-faint)' }}>Không tìm thấy vị trí nào.</td>
+                  </tr>
+                ) : (
+                  filteredOccs.map((occ, idx) => {
+                    let badgeClass = 'badge-blue';
+                    let kindLabel = occ.kind;
+                    if (occ.kind === 'template-attr') {
+                      badgeClass = 'badge-orange';
+                      kindLabel = occ.attrName ? `attr: ${occ.attrName}` : 'attr';
+                    } else if (occ.kind === 'template-text') {
+                      badgeClass = 'badge-blue';
+                      kindLabel = 'text';
+                    } else if (occ.kind === 'vue-script' || occ.kind === 'js-script') {
+                      badgeClass = 'badge-purple';
+                      kindLabel = 'script';
+                    }
+
+                    return (
+                      <tr key={idx}>
+                        <td style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>
+                          <span style={{ color: 'var(--info)' }}>{getRelativePath(occ.file)}</span>
+                          {occ.start !== undefined && (
+                            <span style={{ color: 'var(--text-faint)', marginLeft: 6 }}>({occ.start}-{occ.end})</span>
+                          )}
+                        </td>
+                        <td>
+                          <span className={`badge ${badgeClass}`} style={{ fontSize: 10 }}>{kindLabel}</span>
+                        </td>
+                        <td style={{ wordBreak: 'break-all' }}>{occ.vi}</td>
+                        <td className="key-cell" style={{ wordBreak: 'break-all' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                            <span>{occ.key}</span>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleCopy(occ.key)}
+                              style={{ padding: 3, flexShrink: 0 }}
+                              title="Copy khóa"
+                            >
+                              {copiedText === occ.key ? <Check size={11} color="#22c55e" /> : <Copy size={11} />}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    } else if (activeModal === 'newKeys' || activeModal === 'reusedKeys') {
+      const isReusedType = activeModal === 'reusedKeys';
+      title = isReusedType ? 'Danh sách Khóa tái sử dụng' : 'Danh sách Khóa mới sinh';
+      modalIcon = isReusedType ? <RefreshCw size={18} color="#c084fc" /> : <SlidersHorizontal size={18} color="#22c55e" />;
+
+      const entries = (results.newEntries || []).filter(e => e.isReused === isReusedType);
+      const filteredEntries = entries.filter(e => 
+        (e.key || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
+        (e.vi || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
+        targetLocales.some(loc => (e[loc.code] || '').toLowerCase().includes(modalSearch.toLowerCase()))
+      );
+
+      content = (
+        <div>
+          <div className="modal-search-wrapper" style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <input
+                type="text"
+                className="input-text"
+                placeholder="Tìm kiếm theo khóa, dịch..."
+                value={modalSearch}
+                onChange={e => setModalSearch(e.target.value)}
+                style={{ paddingLeft: 36 }}
+              />
+              <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-faint)' }} />
+            </div>
+          </div>
+
+          <div className="table-wrap" style={{ maxHeight: '50vh' }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: '30%' }}>Khóa (Key)</th>
+                  <th>Gốc (VI)</th>
+                  {targetLocales.map(loc => (
+                    <th key={loc.code}>Dịch ({loc.code.toUpperCase()})</th>
+                  ))}
+                  <th style={{ width: 80, textHeading: 'center' }}>Thao tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredEntries.length === 0 ? (
+                  <tr>
+                    <td colSpan={3 + targetLocales.length} style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-faint)' }}>Không tìm thấy bản ghi nào.</td>
+                  </tr>
+                ) : (
+                  filteredEntries.map((row, idx) => (
+                    <tr key={idx}>
+                      <td className="key-cell" style={{ wordBreak: 'break-all' }}>{row.key}</td>
+                      <td>{row.vi}</td>
+                      {targetLocales.map(loc => (
+                        <td key={loc.code}>{row[loc.code] || '-'}</td>
+                      ))}
+                      <td style={{ textAlign: 'center' }}>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => handleCopy(row.key)}
+                          style={{ padding: 4 }}
+                          title="Copy khóa"
+                        >
+                          {copiedText === row.key ? <Check size={13} color="#22c55e" /> : <Copy size={13} />}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    } else if (activeModal === 'reviews') {
+      title = 'Cảnh báo duyệt';
+      modalIcon = <AlertTriangle size={18} color="#ef4444" />;
+
+      const reviewList = results.reviews || [];
+      const filteredReviews = reviewList.filter(rev => 
+        (rev.msg || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
+        getRelativePath(rev.file).toLowerCase().includes(modalSearch.toLowerCase())
+      );
+
+      content = (
+        <div>
+          <div className="modal-search-wrapper" style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <input
+                type="text"
+                className="input-text"
+                placeholder="Tìm kiếm lỗi/file..."
+                value={modalSearch}
+                onChange={e => setModalSearch(e.target.value)}
+                style={{ paddingLeft: 36 }}
+              />
+              <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-faint)' }} />
+            </div>
+          </div>
+
+          <div style={{ maxHeight: '50vh', overflowY: 'auto' }}>
+            {filteredReviews.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-faint)' }}>Không có cảnh báo duyệt nào.</div>
+            ) : (
+              filteredReviews.map((rev, idx) => (
+                <div key={idx} className="modal-list-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 6, padding: '12px 14px' }}>
+                  <div style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span className="modal-item-path" style={{ fontWeight: 600 }}>{getRelativePath(rev.file)}</span>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => handleCopy(rev.file)}
+                      style={{ padding: 4 }}
+                      title="Copy file path"
+                    >
+                      {copiedText === rev.file ? <Check size={12} color="#22c55e" /> : <Copy size={12} />}
+                    </button>
+                  </div>
+                  <div style={{ color: 'var(--danger)', fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+                    <span>{rev.msg}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="modal-overlay" onClick={() => setActiveModal(null)}>
+        <div className="modal-container" onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <div className="modal-title">
+              {modalIcon}
+              <span>{title}</span>
+            </div>
+            <button className="modal-close" onClick={() => setActiveModal(null)} aria-label="Đóng">
+              <X size={18} />
+            </button>
+          </div>
+          <div className="modal-body">
+            {content}
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-secondary" onClick={() => setActiveModal(null)}>Đóng</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const ActiveIcon = VIEWS[activeView].icon;
 
   return (
@@ -344,20 +688,24 @@ export default function App() {
 
                 {results && (
                   <div>
-                    <div className="stats-grid">
-                      <div className="stat-card">
+                    <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+                      <div className="stat-card" onClick={() => { setActiveModal('files'); setModalSearch(''); }}>
                         <div className="stat-label"><Files size={13} /> Files phân tích</div>
                         <div className="stat-value" style={{ color: '#38bdf8' }}>{results.stats.totalFiles}</div>
                       </div>
-                      <div className="stat-card">
+                      <div className="stat-card" onClick={() => { setActiveModal('occurrences'); setModalSearch(''); }}>
                         <div className="stat-label"><Activity size={13} /> Vị trí phát hiện</div>
                         <div className="stat-value" style={{ color: '#f59e0b' }}>{results.stats.totalOccurrences}</div>
                       </div>
-                      <div className="stat-card">
+                      <div className="stat-card" onClick={() => { setActiveModal('newKeys'); setModalSearch(''); }}>
                         <div className="stat-label"><SlidersHorizontal size={13} /> Khóa mới sinh</div>
                         <div className="stat-value" style={{ color: '#22c55e' }}>{results.stats.newKeysCount}</div>
                       </div>
-                      <div className="stat-card">
+                      <div className="stat-card" onClick={() => { setActiveModal('reusedKeys'); setModalSearch(''); }}>
+                        <div className="stat-label"><RefreshCw size={13} /> Khóa tái sử dụng</div>
+                        <div className="stat-value" style={{ color: '#c084fc' }}>{results.stats.reusedKeysCount || 0}</div>
+                      </div>
+                      <div className="stat-card" onClick={() => { setActiveModal('reviews'); setModalSearch(''); }}>
                         <div className="stat-label"><AlertTriangle size={13} /> Cảnh báo duyệt</div>
                         <div className="stat-value" style={{ color: '#ef4444' }}>{results.stats.reviewsCount}</div>
                       </div>
@@ -365,7 +713,7 @@ export default function App() {
 
                     <div className="download-bar">
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        <Download size={14} /> Tải file ngôn ngữ:
+                        <Download size={14} /> Tải file ngôn ngữ mới:
                       </span>
                       {config.locales.map(loc => (
                         <button
@@ -382,7 +730,8 @@ export default function App() {
                       <table className="table">
                         <thead>
                           <tr>
-                            <th style={{ width: '38%' }}>Khóa (Key)</th>
+                            <th style={{ width: '30%' }}>Khóa (Key)</th>
+                            <th style={{ width: '15%' }}>Trạng thái</th>
                             <th>Gốc (VI)</th>
                             <th>Dịch (EN)</th>
                             <th>Dịch (ZH)</th>
@@ -392,6 +741,13 @@ export default function App() {
                           {results.newEntries.map((row, idx) => (
                             <tr key={idx}>
                               <td className="key-cell">{row.key}</td>
+                              <td>
+                                {row.isReused ? (
+                                  <span className="badge badge-purple" style={{ fontSize: 11 }}>Tái sử dụng</span>
+                                ) : (
+                                  <span className="badge badge-green" style={{ fontSize: 11 }}>Khóa mới</span>
+                                )}
+                              </td>
                               <td>{row.vi}</td>
                               <td>{row.en || '-'}</td>
                               <td>{row.zh || '-'}</td>
@@ -594,6 +950,7 @@ export default function App() {
           </div>
         </section>
       </div>
+      {renderModal()}
     </div>
   );
 }

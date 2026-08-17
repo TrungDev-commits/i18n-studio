@@ -1,23 +1,23 @@
 {
-  "projectRoot": "D:\\H_SourceCode\\SAAS\\bandoso_daklak\\src\\modules\\mobile\\src\\views\\su-kien-le-hoi\\le-hoi-sau-rieng\\index.vue",
+  "projectRoot": "D:\\H_SourceCode\\SAAS\\bandoso_daklak\\src\\modules\\frontend\\src\\views\\su-kien-le-hoi",
   "locales": [
     {
       "code": "vi",
       "name": "Tiếng Việt",
       "isSource": true,
-      "filePath": ""
+      "filePath": "D:\\H_SourceCode\\SAAS\\bandoso_daklak\\resources\\lang\\vi\\messages.php"
     },
     {
       "code": "en",
       "name": "English (EN)",
       "isSource": false,
-      "filePath": ""
+      "filePath": "D:\\H_SourceCode\\SAAS\\bandoso_daklak\\resources\\lang\\en\\messages.php"
     },
     {
       "code": "zh",
       "name": "Chinese (ZH)",
       "isSource": false,
-      "filePath": ""
+      "filePath": "D:\\H_SourceCode\\SAAS\\bandoso_daklak\\resources\\lang\\zh\\messages.php"
     }
   ],
   "scanPaths": [
