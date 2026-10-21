@@ -1,25 +1,20 @@
 {
-  "projectRoot": "D:\\H_SourceCode\\SAAS\\bandoso_daklak\\src\\views\\04_vanphongdieuphoi\\DanhGiaDuLichThonBuon\\index.vue",
+  "projectRoot": "D:\\H_SourceCode\\SAAS\\thuyloi-hcm\\src\\admin\\views\\09_sonhatkyvanhanh\\KiemTraKenhRach\\CreateOrUpdate.vue",
   "locales": [
     {
       "code": "vi",
       "name": "Tiếng Việt",
       "isSource": true,
-      "filePath": "D:\\H_SourceCode\\SAAS\\bandoso_daklak\\resources\\lang\\vi\\messages.php"
+      "filePath": "D:\\H_SourceCode\\SAAS\\thuyloi-hcm\\resources\\lang\\vi\\messages.php"
     },
     {
       "code": "en",
       "name": "English (EN)",
       "isSource": false,
-      "filePath": "D:\\H_SourceCode\\SAAS\\bandoso_daklak\\resources\\lang\\en\\messages.php"
+      "filePath": "D:\\H_SourceCode\\SAAS\\thuyloi-hcm\\resources\\lang\\en\\messages.php"
     }
   ],
-  "scanPaths": [
-    "src/modules",
-    "src/views",
-    "src/components",
-    "resources/views"
-  ],
+  "scanPaths": [],
   "skipDirs": [
     "node_modules",
     "vendor",

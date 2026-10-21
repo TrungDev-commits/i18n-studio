@@ -1,17 +1,27 @@
-const http = require('http');
 const https = require('https');
+const http = require('http');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function fetchOneGoogle(url, timeoutMs = 5000) {
+/**
+ * Gửi request dịch 1 chuỗi qua Google Translate API (clients5)
+ * @param {string} text 
+ * @param {string} targetLang 
+ * @param {number} timeoutMs 
+ * @returns {Promise<string>}
+ */
+async function fetchGoogleTranslate(text, targetLang, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
+    const target = targetLang === 'zh' ? 'zh-CN' : targetLang;
+    const url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=vi&tl=${target}&q=${encodeURIComponent(text)}`;
     const client = url.startsWith('https') ? https : http;
+
     const req = client.get(
       url,
       {
         headers: {
           'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
       },
       (res) => {
@@ -25,11 +35,12 @@ async function fetchOneGoogle(url, timeoutMs = 5000) {
           }
           try {
             const json = JSON.parse(data);
-            let joined = '';
-            (json[0] || []).forEach((s) => {
-              if (s && s[0]) joined += s[0];
-            });
-            resolve(joined);
+            if (Array.isArray(json)) {
+              const translated = typeof json[0] === 'string' ? json[0] : (json[0] && json[0][0]);
+              resolve(translated || text);
+            } else {
+              resolve(text);
+            }
           } catch (e) {
             reject(e);
           }
@@ -52,44 +63,21 @@ async function fetchOneGoogle(url, timeoutMs = 5000) {
  * @param {Function} logCallback 
  */
 async function translateTexts(texts, targetLang, logCallback = console.log) {
-  const target = targetLang === 'zh' ? 'zh-CN' : targetLang;
-  const base = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=vi&tl=${target}&dt=t&q=`;
-  const delim = '\n===DIV===\n';
   const out = {};
-
   if (!texts || texts.length === 0) return out;
 
   logCallback(`🌐 [Dịch sang ${targetLang.toUpperCase()}]: Bắt đầu dịch ${texts.length} chuỗi...`);
 
-  for (let i = 0; i < texts.length; i += 15) {
-    const chunk = texts.slice(i, i + 15);
-    const progress = Math.min(i + 15, texts.length);
-    logCallback(`   -> [${targetLang.toUpperCase()}] Đang xử lý ${i + 1} - ${progress} / ${texts.length}...`);
-
-    const url = base + encodeURIComponent(chunk.join(delim));
-    let success = false;
-
+  for (let i = 0; i < texts.length; i++) {
+    const t = texts[i];
+    logCallback(`   -> [${targetLang.toUpperCase()}] (${i + 1}/${texts.length}): "${t}"`);
     try {
-      await sleep(300);
-      const joined = await fetchOneGoogle(url);
-      const parts = joined.split(delim);
-      if (parts.length === chunk.length) {
-        chunk.forEach((t, idx) => {
-          out[t] = parts[idx].trim() || t;
-        });
-        success = true;
-      }
+      await sleep(100);
+      const translated = await fetchGoogleTranslate(t, targetLang);
+      out[t] = translated.trim() || t;
     } catch (e) {
-      logCallback(`   ⚠️ Thử dịch nhóm lỗi (${e.message}), chuyển sang dịch từng từ đơn...`);
-      for (const t of chunk) {
-        try {
-          await sleep(200);
-          const singleJoined = await fetchOneGoogle(base + encodeURIComponent(t));
-          out[t] = singleJoined.trim() || t;
-        } catch (e2) {
-          out[t] = t;
-        }
-      }
+      logCallback(`   ⚠️ Lỗi khi dịch "${t}": ${e.message}`);
+      out[t] = t;
     }
   }
 

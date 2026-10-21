@@ -8,7 +8,7 @@
     "start": "electron ."
   },
   "dependencies": {
-    "i18n-studio-server": "*"
+    "i18n-studio-server": "file:../server"
   },
   "devDependencies": {
     "electron": "^33.2.0"

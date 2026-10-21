@@ -22,6 +22,11 @@ import {
   Copy,
   Check,
   Square,
+  FileSpreadsheet,
+  Archive,
+  FileText,
+  FileJson,
+  Zap,
 } from 'lucide-react';
 
 const VIEWS = {
@@ -79,6 +84,13 @@ export default function App() {
   const [newLocaleForm, setNewLocaleForm] = useState({ code: '', name: '' });
   const [selectedPreset, setSelectedPreset] = useState('');
   const [addLocaleError, setAddLocaleError] = useState('');
+  const [downloadFormat, setDownloadFormat] = useState('php');
+  const [downloadScope, setDownloadScope] = useState('new');
+  const [downloadNested, setDownloadNested] = useState(false);
+  const [downloadingZip, setDownloadingZip] = useState(false);
+  const [downloadingReport, setDownloadingReport] = useState(false);
+  const [fallbackLoading, setFallbackLoading] = useState(false);
+  const [fallbackResult, setFallbackResult] = useState(null);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -353,6 +365,53 @@ export default function App() {
     }
   };
 
+  const handleScanFallback = async () => {
+    setFallbackLoading(true);
+    setFallbackResult(null);
+    try {
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: '⚡ Đang quét các vị trí gọi song ngữ thiếu Fallback...', type: 'info' }]);
+      const res = await fetch('/api/fallback/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      setFallbackResult(data);
+      setActiveModal('fallbackPreview');
+      setModalSearch('');
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `🎉 Quét hoàn tất! Tìm thấy ${data.totalOccurrences} vị trí thiếu Fallback trong ${data.filesCount} file.`, type: 'success' }]);
+    } catch (err) {
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ Lỗi quét Fallback: ${err.message}`, type: 'error' }]);
+      alert(`Lỗi quét Fallback: ${err.message}`);
+    } finally {
+      setFallbackLoading(false);
+    }
+  };
+
+  const handleApplyFallback = async () => {
+    if (!fallbackResult || !fallbackResult.occurrences || fallbackResult.occurrences.length === 0) return;
+    if (!window.confirm(`Bạn có chắc chắn muốn chèn Fallback tiếng Việt vào ${fallbackResult.occurrences.length} vị trí không?`)) return;
+
+    setFallbackLoading(true);
+    try {
+      const res = await fetch('/api/fallback/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ occurrences: fallbackResult.occurrences })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      alert(`🎉 Đã thêm Fallback thành công cho ${data.appliedOccurrencesCount} vị trí trong ${data.modifiedFilesCount} file!`);
+      setActiveModal(null);
+      setFallbackResult(null);
+    } catch (err) {
+      alert(`Lỗi áp dụng Fallback: ${err.message}`);
+    } finally {
+      setFallbackLoading(false);
+    }
+  };
+
   const handleRunDynamicExtract = async () => {
     setLoading(true);
     setDynamicResults(null);
@@ -399,17 +458,131 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           langCode,
-          entries: results.newEntries
+          entries: results.newEntries,
+          format: downloadFormat,
+          includeReused: downloadScope === 'all',
+          nested: downloadNested
         })
       });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${res.status}`);
+      }
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `messages_${langCode}.php`;
+      a.download = downloadFormat === 'json' ? `${langCode}.json` : `messages_${langCode}.php`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
+      setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `📥 Đã tải file: ${a.download}`, type: 'info' }]);
     } catch (err) {
       setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ Lỗi download: ${err.message}`, type: 'error' }]);
+    }
+  };
+
+  const handleDownloadAllZip = async () => {
+    if (!results || !results.newEntries || !config?.locales) return;
+    setDownloadingZip(true);
+    setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `📦 Đang nén toàn bộ các file ngôn ngữ sang định dạng ${downloadFormat.toUpperCase()}...`, type: 'info' }]);
+    try {
+      const res = await fetch('/api/export/download-all-zip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          locales: config.locales,
+          entries: results.newEntries,
+          format: downloadFormat,
+          includeReused: downloadScope === 'all',
+          nested: downloadNested
+        })
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `i18n_locales_${downloadFormat}_${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `🎉 Đã tải trọn bộ ${config.locales.length} file ngôn ngữ (.ZIP) thành công!`, type: 'info' }]);
+    } catch (err) {
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ Lỗi tải file ZIP: ${err.message}`, type: 'error' }]);
+    } finally {
+      setDownloadingZip(false);
+    }
+  };
+
+  const handleDownloadReport = async (reportFormat = 'csv') => {
+    if (!results) return;
+    setDownloadingReport(true);
+    try {
+      const res = await fetch('/api/export/scan-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          results,
+          locales: config?.locales || [],
+          format: reportFormat
+        })
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = reportFormat === 'csv'
+        ? `i18n_scan_report_${new Date().toISOString().slice(0, 10)}.csv`
+        : `i18n_scan_results_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `📊 Đã xuất báo cáo quét (${reportFormat.toUpperCase()}): ${a.download}`, type: 'info' }]);
+    } catch (err) {
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ Lỗi xuất báo cáo: ${err.message}`, type: 'error' }]);
+    } finally {
+      setDownloadingReport(false);
+    }
+  };
+
+  const handleDownloadDynamicConfig = async (format = 'php') => {
+    if (!dynamicResults || !dynamicResults.mappedTables) return;
+    try {
+      const res = await fetch('/api/export/dynamic-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mappedTables: dynamicResults.mappedTables,
+          format
+        })
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = format === 'json' ? 'mapped_tables.json' : 'translation.php';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `📥 Đã tải file cấu hình động: ${a.download}`, type: 'info' }]);
+    } catch (err) {
+      setLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: `❌ Lỗi tải file: ${err.message}`, type: 'error' }]);
     }
   };
 
@@ -566,6 +739,17 @@ export default function App() {
               />
               <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-faint)' }} />
             </div>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => handleDownloadReport('csv')}
+              disabled={downloadingReport}
+              title="Xuất toàn bộ báo cáo kết quả quét sang file CSV"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
+            >
+              <FileSpreadsheet size={14} color="#22c55e" />
+              <span>Xuất CSV</span>
+            </button>
           </div>
 
           <div className="table-wrap" style={{ maxHeight: '50vh' }}>
@@ -831,6 +1015,65 @@ export default function App() {
           </div>
         </form>
       );
+    } else if (activeModal === 'fallbackPreview') {
+      title = 'Xem trước & Thêm Fallback tự động cho các hàm song ngữ';
+      modalIcon = <Zap size={18} color="#eab308" />;
+
+      const occList = fallbackResult?.occurrences || [];
+      const filteredOccs = occList.filter(occ => 
+        (occ.vi || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
+        (occ.key || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
+        (occ.raw || '').toLowerCase().includes(modalSearch.toLowerCase()) ||
+        getRelativePath(occ.file).toLowerCase().includes(modalSearch.toLowerCase())
+      );
+
+      content = (
+        <div>
+          <div style={{ marginBottom: 12, padding: 12, background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.25)', borderRadius: 'var(--radius)', fontSize: 13 }}>
+            <div><strong>Đã tìm thấy:</strong> {fallbackResult?.totalOccurrences} vị trí gọi hàm song ngữ chưa có fallback trong {fallbackResult?.filesCount} file.</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>
+              Chuỗi dự phòng tiếng Việt được tra cứu trực tiếp từ <code>{fallbackResult?.viPath}</code> ({fallbackResult?.totalKeysInVi} khóa).
+            </div>
+          </div>
+
+          <div className="modal-search-wrapper" style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <input
+                type="text"
+                className="input-text"
+                placeholder="Tìm kiếm theo file, từ khóa, cú pháp..."
+                value={modalSearch}
+                onChange={e => setModalSearch(e.target.value)}
+                style={{ paddingLeft: 36 }}
+              />
+              <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-faint)' }} />
+            </div>
+          </div>
+
+          <div style={{ maxHeight: '50vh', overflowY: 'auto' }}>
+            {filteredOccs.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-faint)' }}>Không tìm thấy vị trí nào.</div>
+            ) : (
+              filteredOccs.map((occ, idx) => (
+                <div key={idx} style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ color: '#38bdf8', fontWeight: 500, fontSize: 12 }}>{getRelativePath(occ.file)}</span>
+                    <span className="badge badge-blue">{occ.kind}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'monospace', fontSize: 12, flexWrap: 'wrap' }}>
+                    <span style={{ color: '#ef4444', textDecoration: 'line-through' }}>{occ.raw}</span>
+                    <span style={{ color: 'var(--text-faint)' }}>➔</span>
+                    <span style={{ color: '#22c55e', fontWeight: 600 }}>{occ.replacement}</span>
+                  </div>
+                  <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 12 }}>
+                    Giá trị tiếng Việt: <em>"{occ.vi}"</em>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      );
     }
 
     return (
@@ -853,6 +1096,19 @@ export default function App() {
               <>
                 <button className="btn btn-secondary" style={{ marginRight: 8 }} onClick={() => setActiveModal(null)}>Hủy</button>
                 <button className="btn btn-primary" onClick={handleAddLocaleSubmit}>Thêm Ngôn Ngữ</button>
+              </>
+            ) : activeModal === 'fallbackPreview' ? (
+              <>
+                <button className="btn btn-secondary" style={{ marginRight: 8 }} onClick={() => setActiveModal(null)}>Đóng</button>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleApplyFallback}
+                  disabled={fallbackLoading || !fallbackResult?.occurrences?.length}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                >
+                  {fallbackLoading ? <RefreshCw className="animate-spin" size={14} /> : <Zap size={14} />}
+                  Áp dụng chèn {fallbackResult?.occurrences?.length || 0} Fallback vào file
+                </button>
               </>
             ) : (
               <button className="btn btn-secondary" onClick={() => setActiveModal(null)}>Đóng</button>
@@ -941,11 +1197,73 @@ export default function App() {
               <div className="view-head">
                 <div>
                   <h2><FileCode size={19} color="#22c55e" /> Bóc tách Chuỗi Tĩnh & Refactor</h2>
-                  <p>Quét chuỗi tiếng Việt hardcode trong file Vue/JS, sinh khóa và dịch tự động</p>
+                  <p>Quét chuỗi tiếng Việt hardcode trong file Vue, JS, PHP, Blade; sinh khóa, dịch và refactor tự động</p>
                 </div>
               </div>
 
               <div className="card">
+                <div style={{ display: 'grid', gap: 14, marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid var(--border)' }}>
+                  <div>
+                    <label className="field-label" style={{ fontWeight: 600 }}>
+                      📁 Thư mục / File / URL Quét Mã Nguồn (Project Root / File Path / URL):
+                    </label>
+                    <input
+                      type="text"
+                      className="input-text"
+                      placeholder="Ví dụ: D:\H_SourceCode\SAAS\bandoso_daklak hoặc file:///D:/.../Controller.php"
+                      value={config?.projectRoot || ''}
+                      onChange={e => setConfig(prev => ({ ...prev, projectRoot: e.target.value }))}
+                    />
+                  </div>
+
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <label className="field-label" style={{ marginBottom: 0 }}>
+                        📂 Danh sách Thư mục / File quét tương đối (Scan Paths):
+                      </label>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        style={{ padding: '2px 8px', fontSize: 11 }}
+                        onClick={() => setConfig(prev => ({ ...prev, scanPaths: [...(prev.scanPaths || []), ''] }))}
+                      >
+                        <Plus size={12} /> Thêm đường dẫn
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {(config?.scanPaths || []).map((sp, idx) => (
+                        <div key={idx} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            className="input-text"
+                            placeholder="Ví dụ: app/Http/Controllers, resources/views, src/views..."
+                            value={sp}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setConfig(prev => ({
+                                ...prev,
+                                scanPaths: prev.scanPaths.map((item, i) => i === idx ? val : item)
+                              }));
+                            }}
+                          />
+                          <button
+                            className="btn btn-icon btn-danger-ghost"
+                            title="Xóa đường dẫn"
+                            onClick={() => {
+                              setConfig(prev => ({
+                                ...prev,
+                                scanPaths: prev.scanPaths.filter((_, i) => i !== idx)
+                              }));
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
                 <div className="options-row">
                   <label className="opt-check">
                     <input
@@ -962,14 +1280,24 @@ export default function App() {
                       checked={options.autoRefactor}
                       onChange={e => setOptions(prev => ({ ...prev, autoRefactor: e.target.checked }))}
                     />
-                    Tự động Refactor mã nguồn sang $t()
+                    Tự động Refactor mã nguồn sang $t() / __()
                   </label>
+
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handleScanFallback}
+                    disabled={loading || fallbackLoading}
+                    title="Tra cứu vi/messages.php và chèn Fallback cho các hàm song ngữ chưa có dự phòng"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 'auto', marginRight: 8 }}
+                  >
+                    {fallbackLoading ? <RefreshCw className="animate-spin" size={14} /> : <Zap size={14} color="#eab308" />}
+                    Thêm Fallback tự động
+                  </button>
 
                   {loading ? (
                     <button
                       className="btn btn-danger"
                       onClick={handleStopExtract}
-                      style={{ marginLeft: 'auto' }}
                     >
                       <Square size={14} fill="currentColor" /> Dừng Quét
                     </button>
@@ -977,7 +1305,6 @@ export default function App() {
                     <button
                       className="btn btn-primary"
                       onClick={handleRunStaticExtract}
-                      style={{ marginLeft: 'auto' }}
                     >
                       <Play size={16} /> Bắt đầu Thực thi Quét
                     </button>
@@ -1009,19 +1336,112 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="download-bar">
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        <Download size={14} /> Tải file ngôn ngữ mới:
-                      </span>
-                      {config.locales.map(loc => (
-                        <button
-                          key={loc.code}
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => handleDownloadLang(loc.code)}
-                        >
-                          {loc.code.toUpperCase()} (.php)
-                        </button>
-                      ))}
+                    <div className="download-panel">
+                      <div className="download-panel-header">
+                        <div className="download-panel-title">
+                          <Download size={16} color="#38bdf8" />
+                          <span>Tải Kết Quả Quét & File Ngôn Ngữ</span>
+                        </div>
+                        <div className="download-controls">
+                          <div className="control-group">
+                            <span className="control-label">Định dạng:</span>
+                            <div className="btn-toggle-group">
+                              <button
+                                type="button"
+                                className={`btn-toggle ${downloadFormat === 'php' ? 'active' : ''}`}
+                                onClick={() => setDownloadFormat('php')}
+                              >
+                                PHP (.php)
+                              </button>
+                              <button
+                                type="button"
+                                className={`btn-toggle ${downloadFormat === 'json' ? 'active' : ''}`}
+                                onClick={() => setDownloadFormat('json')}
+                              >
+                                JSON (.json)
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="control-group">
+                            <span className="control-label">Phạm vi:</span>
+                            <select
+                              className="input-select-sm"
+                              value={downloadScope}
+                              onChange={e => setDownloadScope(e.target.value)}
+                            >
+                              <option value="new">Chỉ khóa mới ({results.stats.newKeysCount})</option>
+                              <option value="all">Tất cả khóa phát hiện ({results.newEntries.length})</option>
+                            </select>
+                          </div>
+
+                          {downloadFormat === 'json' && (
+                            <label className="checkbox-sm">
+                              <input
+                                type="checkbox"
+                                checked={downloadNested}
+                                onChange={e => setDownloadNested(e.target.checked)}
+                              />
+                              <span>JSON lồng nhau (Nested)</span>
+                            </label>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="download-panel-body">
+                        <div className="download-action-section">
+                          <span className="section-title">Tải từng file ngôn ngữ:</span>
+                          <div className="download-buttons-grid">
+                            {config.locales.map(loc => (
+                              <button
+                                key={loc.code}
+                                className="btn btn-secondary btn-sm download-btn"
+                                onClick={() => handleDownloadLang(loc.code)}
+                                title={`Tải file ${downloadFormat === 'json' ? `${loc.code}.json` : `messages_${loc.code}.php`}`}
+                              >
+                                <Download size={13} />
+                                <span>{loc.code.toUpperCase()}</span>
+                                <small style={{ opacity: 0.7 }}>({downloadFormat === 'json' ? '.json' : '.php'})</small>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="download-action-section download-action-divider">
+                          <span className="section-title">Tải trọn bộ & Xuất Báo cáo Quét:</span>
+                          <div className="download-buttons-grid">
+                            <button
+                              className="btn btn-primary btn-sm"
+                              onClick={handleDownloadAllZip}
+                              disabled={downloadingZip}
+                              title="Tải file ZIP đóng gói toàn bộ các file ngôn ngữ"
+                            >
+                              <Archive size={14} />
+                              <span>{downloadingZip ? 'Đang nén ZIP...' : `Tải tất cả ngôn ngữ (.ZIP)`}</span>
+                            </button>
+
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleDownloadReport('csv')}
+                              disabled={downloadingReport}
+                              title="Xuất file CSV báo cáo kết quả quét (mở trực tiếp bằng Excel tiếng Việt)"
+                            >
+                              <FileSpreadsheet size={14} color="#22c55e" />
+                              <span>Báo cáo quét (.CSV)</span>
+                            </button>
+
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleDownloadReport('json')}
+                              disabled={downloadingReport}
+                              title="Xuất dữ liệu chi tiết kết quả quét dưới dạng JSON"
+                            >
+                              <FileJson size={14} color="#f59e0b" />
+                              <span>Báo cáo quét (.JSON)</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
 
                     <div className="table-wrap">
@@ -1276,9 +1696,29 @@ export default function App() {
                         ✅ Kết quả phát hiện các trường dữ liệu cần dịch:
                       </h3>
                       {dynamicResults.mappedTables && Object.keys(dynamicResults.mappedTables).length > 0 && (
-                        <button className="btn btn-secondary btn-sm" onClick={handleWriteTranslationFile} disabled={loading}>
-                          📝 Ghi vào config/translation.php
-                        </button>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleDownloadDynamicConfig('php')}
+                            title="Tải file translation.php cấu hình bảng và trường"
+                          >
+                            <Download size={13} /> Tải translation.php
+                          </button>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleDownloadDynamicConfig('json')}
+                            title="Tải cấu trúc bảng và trường dạng JSON"
+                          >
+                            <FileJson size={13} /> Tải JSON
+                          </button>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={handleWriteTranslationFile}
+                            disabled={loading}
+                          >
+                            📝 Ghi vào config/translation.php
+                          </button>
+                        </div>
                       )}
                     </div>
 

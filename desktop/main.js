@@ -1,6 +1,11 @@
 const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('path');
-const { startServer } = require('i18n-studio-server');
+let startServer;
+try {
+  startServer = require('i18n-studio-server').startServer;
+} catch (e) {
+  startServer = require('../server/server.js').startServer;
+}
 
 const DEV_URL = process.env.I18N_DEV_URL || 'http://localhost:3000';
 const isDev = process.argv.includes('--dev');

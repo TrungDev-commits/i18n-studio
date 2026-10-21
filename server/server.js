@@ -4,15 +4,25 @@ const path = require('path');
 const fs = require('fs');
 
 const { getConfig, saveConfig } = require('./services/configManager');
-const { collectFiles, extractFile, readExistingLang, slugify, formatReplacement, escapePhp } = require('./services/scanner');
+const { collectFiles, extractFile, readExistingLang, slugify, formatReplacement, migrateClassPropertiesToConstructor } = require('./services/scanner');
 const { translateTexts } = require('./services/translator');
 const { httpGetJson, mapFieldsToTablesWithoutDb, writeTranslationPhp, updateMiddlewareConfig, resolveTranslationFilePath, loginAndGetAuthHeaders } = require('./services/apiScanner');
+const { scanAllMissingFallbacks, applyFallbacks } = require('./services/fallbackInjector');
+const {
+  escapePhp,
+  generatePhpContent,
+  generateJsonContent,
+  generateCsvReport,
+  generateJsonReport,
+  generateDynamicPhpConfig,
+  exportZipArchive
+} = require('./services/exporter');
 
 const app = express();
 const PORT = 4000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '200mb' }));
 
 // Lưu danh sách clients SSE để stream log
 let sseClients = [];
@@ -57,16 +67,18 @@ app.post('/api/extract/static', async (req, res) => {
     const config = { ...getConfig(), ...req.body };
     const { projectRoot, scanPaths, skipDirs, locales, prefix, langFileName, dryRun, autoRefactor } = config;
 
-    broadcastLog(`🚀 Bắt đầu quét mã nguồn tại thư mục: ${projectRoot}`);
-    broadcastLog(`🔍 Các thư mục quét: ${scanPaths.join(', ')}`);
+    broadcastLog(`🚀 Bắt đầu quét mã nguồn tại: ${projectRoot}`);
+    if (Array.isArray(scanPaths) && scanPaths.length > 0) {
+      broadcastLog(`🔍 Các đường dẫn quét bổ sung: ${scanPaths.join(', ')}`);
+    }
 
     const files = collectFiles(projectRoot, scanPaths, skipDirs);
-    broadcastLog(`📁 Đã tìm thấy ${files.length} file .vue / .js để phân tích.`);
+    broadcastLog(`📁 Đã tìm thấy ${files.length} file (.vue, .js, .blade.php, .php) để phân tích.`);
 
     const occurrences = [];
     const reviews = [];
     for (const f of files) {
-      extractFile(f, occurrences, reviews);
+      extractFile(f, occurrences, reviews, dryRun);
     }
 
     broadcastLog(`🔎 Phát hiện ${occurrences.length} vị trí chuỗi tiếng Việt hardcode.`);
@@ -276,7 +288,14 @@ app.post('/api/extract/static', async (req, res) => {
 
       let refactoredFiles = 0;
       for (const [file, occs] of filesToModify) {
-        const realSrc = fs.readFileSync(file, 'utf8');
+        let realSrc = fs.readFileSync(file, 'utf8');
+        const ext = path.extname(file).toLowerCase();
+        if (ext === '.php') {
+          const migratedSrc = migrateClassPropertiesToConstructor(realSrc);
+          if (migratedSrc !== realSrc) {
+            realSrc = migratedSrc;
+          }
+        }
         const sorted = [...occs].sort((a, b) => b.start - a.start);
         let out = realSrc;
         let changed = 0;
@@ -287,12 +306,12 @@ app.post('/api/extract/static', async (req, res) => {
             changed++;
           }
         }
-        if (changed) {
+        if (changed || (ext === '.php' && realSrc !== fs.readFileSync(file, 'utf8'))) {
           fs.writeFileSync(file, out, 'utf8');
           refactoredFiles++;
         }
       }
-      broadcastLog(`🎉 Đã refactor thành công ${refactoredFiles} file Vue/JS.`);
+      broadcastLog(`🎉 Đã refactor thành công ${refactoredFiles} file Vue/JS/PHP/Blade.`);
     }
 
     broadcastLog(`✅ Hoàn thành phân tích và xử lý.`);
@@ -478,22 +497,137 @@ app.post('/api/extract/dynamic/write', (req, res) => {
   }
 });
 
-// Endpoint xuất file tải về
+// Endpoint xuất file ngôn ngữ đơn lẻ (PHP hoặc JSON)
 app.post('/api/export/download-file', (req, res) => {
-  const { langCode, entries } = req.body;
-  let phpContent = `<?php\n\nreturn [\n`;
-  for (const item of (entries || [])) {
-    // Không khai báo lại key nếu key đã trùng/định nghĩa từ trước
-    if (item.isReused) continue;
-    const cleanKey = item.key.replace(/^messages\./, '');
-    const val = item[langCode] || item.vi || '';
-    phpContent += `    '${escapePhp(cleanKey)}' => '${escapePhp(val)}',\n`;
-  }
-  phpContent += `];\n`;
+  try {
+    const { langCode, entries, format = 'php', includeReused = false, nested = false } = req.body;
+    if (!langCode) {
+      return res.status(400).json({ success: false, error: 'Thiếu mã ngôn ngữ (langCode)' });
+    }
 
-  res.setHeader('Content-Type', 'application/x-httpd-php');
-  res.setHeader('Content-Disposition', `attachment; filename=messages_${langCode}.php`);
-  res.send(phpContent);
+    if (format === 'json') {
+      const jsonContent = generateJsonContent(langCode, entries, { includeReused, nested });
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${langCode}.json"`);
+      return res.send(jsonContent);
+    }
+
+    const phpContent = generatePhpContent(langCode, entries, { includeReused });
+    res.setHeader('Content-Type', 'application/x-httpd-php; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="messages_${langCode}.php"`);
+    res.send(phpContent);
+  } catch (err) {
+    console.error('Lỗi download file:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint xuất file ZIP đóng gói toàn bộ các file ngôn ngữ
+app.post('/api/export/download-all-zip', (req, res) => {
+  try {
+    const { locales, entries, format = 'php', includeReused = false, nested = false } = req.body;
+    if (!Array.isArray(locales) || locales.length === 0) {
+      return res.status(400).json({ success: false, error: 'Thiếu danh sách ngôn ngữ' });
+    }
+
+    exportZipArchive(res, {
+      locales,
+      entries: entries || [],
+      format,
+      includeReused,
+      nested,
+      filename: `i18n_locales_${format}.zip`
+    });
+  } catch (err) {
+    console.error('Lỗi download ZIP:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint xuất file báo cáo kết quả quét (CSV kèm UTF-8 BOM hoặc JSON chi tiết)
+app.post('/api/export/scan-report', (req, res) => {
+  try {
+    const { results, locales, format = 'csv' } = req.body;
+    if (!results) {
+      return res.status(400).json({ success: false, error: 'Thiếu dữ liệu kết quả quét' });
+    }
+
+    if (format === 'json') {
+      const jsonReport = generateJsonReport(results, locales || []);
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="i18n_scan_results.json"`);
+      return res.send(jsonReport);
+    }
+
+    const csvContent = generateCsvReport(results, locales || []);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="i18n_scan_report.csv"`);
+    res.send(csvContent);
+  } catch (err) {
+    console.error('Lỗi xuất báo cáo quét:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint tải file config kết quả quét động API (translation.php hoặc JSON)
+app.post('/api/export/dynamic-config', (req, res) => {
+  try {
+    const { mappedTables, format = 'php' } = req.body;
+    if (!mappedTables) {
+      return res.status(400).json({ success: false, error: 'Thiếu dữ liệu bảng đã quét' });
+    }
+
+    if (format === 'json') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="mapped_tables.json"`);
+      return res.send(JSON.stringify(mappedTables, null, 2));
+    }
+
+    const phpContent = generateDynamicPhpConfig(mappedTables);
+    res.setHeader('Content-Type', 'application/x-httpd-php; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="translation.php"`);
+    res.send(phpContent);
+  } catch (err) {
+    console.error('Lỗi tải config dynamic:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint quét các vị trí sử dụng song ngữ mà chưa có fallback
+app.post('/api/fallback/scan', async (req, res) => {
+  try {
+    const config = { ...getConfig(), ...req.body };
+    broadcastLog(`🔍 Bắt đầu quét các vị trí gọi song ngữ thiếu Fallback...`);
+    const scanResult = scanAllMissingFallbacks(config);
+    broadcastLog(`✨ Quét hoàn tất! Tìm thấy ${scanResult.totalOccurrences} vị trí thiếu Fallback trong ${scanResult.filesCount} file.`);
+    res.json({
+      success: true,
+      ...scanResult
+    });
+  } catch (err) {
+    broadcastLog(`❌ Lỗi quét Fallback: ${err.message}`, 'error');
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint áp dụng thêm Fallback tự động
+app.post('/api/fallback/apply', async (req, res) => {
+  try {
+    const { occurrences } = req.body;
+    if (!Array.isArray(occurrences) || occurrences.length === 0) {
+      return res.status(400).json({ success: false, error: 'Không có danh sách vị trí cần thêm fallback' });
+    }
+    broadcastLog(`⚡ Đang tiến hành thêm Fallback tự động vào ${occurrences.length} vị trí...`);
+    const applyResult = applyFallbacks(occurrences);
+    broadcastLog(`🎉 Đã thêm Fallback thành công cho ${applyResult.appliedOccurrencesCount} vị trí trong ${applyResult.modifiedFilesCount} file!`);
+    res.json({
+      success: true,
+      ...applyResult
+    });
+  } catch (err) {
+    broadcastLog(`❌ Lỗi khi áp dụng Fallback: ${err.message}`, 'error');
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Serve frontend build if exists
